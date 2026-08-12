@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+ui/frontend/dist/
+ui/frontend/.vite/
+
+# Data (large / not committed — pointer files only)
+data/video/*
+!data/video/.gitkeep
+!data/video/pointer.json
+data/mri/*
+!data/mri/.gitkeep
+!data/mri/pointer.json
+data/annotations/*
+!data/annotations/.gitkeep
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.key.json
+service-account*.json
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp
+
+# Logs
+*.log
