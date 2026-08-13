@@ -46,14 +46,14 @@ from pydantic import BaseModel
 from agents.monitor.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate, pick_escalation_candidate
 from agents.monitor.knowledge import compute_psi, route_tier
 from agents.monitor.subagents import (
-    FRAME_SAMPLING_PROFILE,
+    VIDEO_FPS_PROFILE,
     DeepOutput,
     ScreenOutput,
     build_subagent,
 )
 from state.schema import DivergenceEvent, ErrorCategory, ExpertiseTier, MonitorSubAgentAssessment, SubAgentRole
 from tools.sedmamba_labels import ErrorAnnotations, MonitorWindow, generate_windows, load_error_annotations
-from tools.video_utils import find_video_path, sample_frames, build_multimodal_content
+from tools.video_utils import build_video_window_content, find_video_gcs_uri, video_mime_type
 
 _ROLES: list[SubAgentRole] = ["temporal", "spatial", "procedural"]
 
@@ -105,20 +105,15 @@ async def _run_agent_once(agent, content: types.Content, output_model: type[Base
     return output_model.model_validate_json(final_text)
 
 
-async def _run_screen_pass(video_path, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
+async def _run_screen_pass(gcs_uri: str, mime_type: str, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
     async def one(role: SubAgentRole) -> tuple[SubAgentRole, ScreenOutput]:
-        profile = FRAME_SAMPLING_PROFILE[role]
-        frames = sample_frames(
-            video_path,
-            start_frame=window.start_frame,
-            end_frame=window.end_frame,
-            n_frames=profile["n_frames"],
-            resize_to=profile["resize_to"],
-            jpeg_quality=profile["jpeg_quality"],
-        )
-        content = build_multimodal_content(
-            f"Analyze this ~{window.end_s - window.start_s:.0f}s window (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
-            frames,
+        content = build_video_window_content(
+            gcs_uri,
+            mime_type,
+            start_s=window.start_s,
+            end_s=window.end_s,
+            fps=VIDEO_FPS_PROFILE[role],
+            instruction_text=f"Analyze this ~{window.end_s - window.start_s:.0f}s window (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
         )
         result = await _run_agent_once(_SCREEN_AGENTS[role], content, ScreenOutput)
         return role, result
@@ -128,21 +123,16 @@ async def _run_screen_pass(video_path, window: MonitorWindow) -> dict[SubAgentRo
 
 
 async def _run_deep_pass(
-    video_path, window: MonitorWindow, category: ErrorCategory, tier: ExpertiseTier
+    gcs_uri: str, mime_type: str, window: MonitorWindow, category: ErrorCategory, tier: ExpertiseTier
 ) -> dict[SubAgentRole, DeepOutput]:
     async def one(role: SubAgentRole) -> tuple[SubAgentRole, DeepOutput]:
-        profile = FRAME_SAMPLING_PROFILE[role]
-        frames = sample_frames(
-            video_path,
-            start_frame=window.start_frame,
-            end_frame=window.end_frame,
-            n_frames=profile["n_frames"],
-            resize_to=profile["resize_to"],
-            jpeg_quality=profile["jpeg_quality"],
-        )
-        content = build_multimodal_content(
-            f"Deep review, category={category}, tier={tier} (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
-            frames,
+        content = build_video_window_content(
+            gcs_uri,
+            mime_type,
+            start_s=window.start_s,
+            end_s=window.end_s,
+            fps=VIDEO_FPS_PROFILE[role],
+            instruction_text=f"Deep review, category={category}, tier={tier} (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
         )
         agent = build_subagent(role, mode="deep", tier=tier, category=category)
         result = await _run_agent_once(agent, content, DeepOutput)
@@ -158,11 +148,12 @@ async def run_monitor_window(
     alpha_weights: dict[SubAgentRole, float] = DEFAULT_ALPHA,
     threshold: float = DEFAULT_THRESHOLD,
 ) -> MonitorWindowAssessment:
-    video_path = find_video_path(video_id)
-    if video_path is None:
-        raise FileNotFoundError(f"no video found for {video_id}")
+    gcs_uri = find_video_gcs_uri(video_id)
+    if gcs_uri is None:
+        raise FileNotFoundError(f"no video found in GCS for {video_id} — upload it first (see docs/monitor_agent_video_input_benchmark.md)")
+    mime_type = video_mime_type(gcs_uri)
 
-    screen_results = await _run_screen_pass(video_path, window)
+    screen_results = await _run_screen_pass(gcs_uri, mime_type, window)
 
     category_confidences = [
         {op.category: op.confidence for op in screen.opinions if op.suspected} for screen in screen_results.values()
@@ -174,7 +165,7 @@ async def run_monitor_window(
     if escalated_category is not None:
         psi = compute_psi(escalated_category)
         tier = route_tier(psi)
-        deep_results = await _run_deep_pass(video_path, window, escalated_category, tier)
+        deep_results = await _run_deep_pass(gcs_uri, mime_type, window, escalated_category, tier)
         o_values = {role: deep_results[role].error_present for role in _ROLES}
         for role in _ROLES:
             deep = deep_results[role]

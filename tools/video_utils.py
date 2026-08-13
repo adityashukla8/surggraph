@@ -4,22 +4,41 @@ FPS is always read from the actual video file (cv2), never assumed — see
 scripts/compute_phase_priors.py and tools/sedmamba_labels.py, both of which
 need a real frame rate to convert between frame numbers and seconds.
 
-Frame sampling + Gemini multi-image encoding is used by the Monitor Agent's
-sub-agents (agents/monitor/subagents.py) to build the multi-image calls
-CARES-style windowed detection needs (plan §3.5).
+Two ways to get video content into a Gemini call:
+  - `build_video_window_content` (native video, GCS-hosted, via
+    `types.VideoMetadata`) — what agents/monitor/ uses as of the
+    docs/monitor_agent_video_input_benchmark.md migration: ~2.7x fewer
+    prompt tokens and caught a real event our still-frame sampling missed,
+    at the cost of ~2.9x higher per-call latency (real, benchmarked
+    numbers, not estimates — see that doc).
+  - `sample_frames`/`frames_to_gemini_parts`/`build_multimodal_content`
+    (locally-extracted JPEG stills) — kept for other uses (a future Scene
+    Graph Builder, UI thumbnails), not deleted by that migration.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import NamedTuple
 
 import cv2
 import numpy as np
+from dotenv import load_dotenv
+from google.cloud import storage as gcs_storage
 from google.genai import types
+
+load_dotenv()
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 VIDEO_DIR = DATA_ROOT / "video"
+
+_VIDEO_MIME_TYPES = {
+    ".avi": "video/x-msvideo",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+}
 
 
 def find_video_fps(video_id: str) -> float | None:
@@ -95,3 +114,54 @@ def build_multimodal_content(instruction_text: str, frames: list[FrameSample], r
     text = f"{instruction_text}\n\n{caption_lines}"
     parts = [types.Part.from_text(text=text), *frames_to_gemini_parts(frames)]
     return types.Content(role=role, parts=parts)
+
+
+def video_mime_type(path_or_uri: str) -> str:
+    return _VIDEO_MIME_TYPES.get(Path(path_or_uri).suffix.lower(), "video/mp4")
+
+
+def find_video_gcs_uri(video_id: str) -> str | None:
+    """Finds the uploaded video's GCS URI (gs://<bucket>/videos/<video_id>/<filename>)
+    for native video input to Gemini — mirrors find_video_path's local-file
+    lookup, against Cloud Storage instead. Requires SURGGRAPH_GCS_BUCKET to
+    be set and the video to have already been uploaded there (a one-time
+    step per video, not per call/window/agent — see
+    docs/monitor_agent_video_input_benchmark.md)."""
+    bucket_name = os.environ.get("SURGGRAPH_GCS_BUCKET")
+    if not bucket_name:
+        return None
+    client = gcs_storage.Client()
+    prefix = f"videos/{video_id}/"
+    video_blobs = [
+        b for b in client.list_blobs(bucket_name, prefix=prefix) if Path(b.name).suffix.lower() in _VIDEO_MIME_TYPES
+    ]
+    if not video_blobs:
+        return None
+    return f"gs://{bucket_name}/{video_blobs[0].name}"
+
+
+def build_video_window_content(
+    gcs_uri: str,
+    mime_type: str,
+    start_s: float,
+    end_s: float,
+    fps: float,
+    instruction_text: str,
+    role: str = "user",
+) -> types.Content:
+    """Native-video equivalent of build_multimodal_content: clips directly
+    to [start_s, end_s) via Gemini's own VideoMetadata rather than
+    extracting/encoding still frames locally. `fps` controls sampling
+    density (valid range (0.0, 24.0], Gemini default 1.0) — see
+    agents/monitor/subagents.py::VIDEO_FPS_PROFILE for the per-role values
+    chosen after benchmarking (docs/monitor_agent_video_input_benchmark.md)."""
+    return types.Content(
+        role=role,
+        parts=[
+            types.Part.from_text(text=instruction_text),
+            types.Part(
+                file_data=types.FileData(file_uri=gcs_uri, mime_type=mime_type),
+                video_metadata=types.VideoMetadata(fps=fps, start_offset=f"{start_s:.1f}s", end_offset=f"{end_s:.1f}s"),
+            ),
+        ],
+    )

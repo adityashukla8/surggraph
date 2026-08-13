@@ -152,12 +152,16 @@ def build_subagent(
     raise ValueError(f"unknown mode: {mode!r}")
 
 
-# Frame-sampling profile per role, applied to the same window (plan §3.5):
-# Temporal wants a dense sample across the full window to see motion trend;
-# Spatial wants few frames at full detail for positional precision;
-# Procedural wants a middle ground for technique/sequence.
-FRAME_SAMPLING_PROFILE: dict[SubAgentRole, dict] = {
-    "temporal": {"n_frames": 10, "resize_to": (960, 540), "jpeg_quality": 85},
-    "spatial": {"n_frames": 4, "resize_to": None, "jpeg_quality": 95},
-    "procedural": {"n_frames": 6, "resize_to": None, "jpeg_quality": 90},
+# Native-video sampling density per role, applied to the same window (plan
+# §3.5, migrated per docs/monitor_agent_video_input_benchmark.md — replaces
+# the earlier still-frame FRAME_SAMPLING_PROFILE). Temporal wants dense
+# sampling to see motion/hesitation trend (fps=5.0 matches the benchmarked
+# accuracy sweet spot for motion-sensitive tasks); Spatial and Procedural
+# want fewer frame-equivalents over the same 10s window, mirroring their
+# original "fewer frames" intent (media_resolution tuning for Spatial's
+# positional-precision need is an open follow-up, not yet benchmarked).
+VIDEO_FPS_PROFILE: dict[SubAgentRole, float] = {
+    "temporal": 5.0,
+    "spatial": 0.4,
+    "procedural": 0.6,
 }

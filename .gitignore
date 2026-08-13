@@ -19,6 +19,8 @@ data/mri/*
 !data/mri/pointer.json
 data/annotations/*
 !data/annotations/.gitkeep
+data/runtime/*
+!data/runtime/.gitkeep
 
 # Secrets / env
 .env
