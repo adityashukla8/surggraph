@@ -41,25 +41,45 @@ _VIDEO_MIME_TYPES = {
 }
 
 
-def find_video_fps(video_id: str) -> float | None:
+# Deterministic source-file preference, not directory-iteration order.
+# Real bug this fixes: once scripts/prepare_demo_videos.py's transcoded
+# and composited-overlay MP4s exist alongside the original .avi,
+# `iterdir()`'s arbitrary order could return whichever file the filesystem
+# happened to list first — including a still-being-written file (a
+# genuine "moov atom not found" cv2 read failure was observed from this).
+# The suffix priority order picks the original downloaded source first
+# (canonical frame numbering the real annotations were built against);
+# "_annotated" is always excluded — it's a UI-display derivative, never a
+# source agents should read frames from.
+_SOURCE_SUFFIX_PRIORITY = [".avi", ".mov", ".mp4"]
+
+
+def _find_source_video(video_id: str) -> Path | None:
     video_dir = VIDEO_DIR / video_id
     if not video_dir.exists():
         return None
-    video_files = [p for p in video_dir.iterdir() if p.suffix.lower() in {".avi", ".mp4", ".mov"}]
-    if not video_files:
+    candidates = {
+        p for p in video_dir.iterdir() if p.suffix.lower() in _VIDEO_MIME_TYPES and "_annotated" not in p.stem
+    }
+    for suffix in _SOURCE_SUFFIX_PRIORITY:
+        matches = sorted(p for p in candidates if p.suffix.lower() == suffix)
+        if matches:
+            return matches[0]
+    return None
+
+
+def find_video_fps(video_id: str) -> float | None:
+    path = _find_source_video(video_id)
+    if path is None:
         return None
-    cap = cv2.VideoCapture(str(video_files[0]))
+    cap = cv2.VideoCapture(str(path))
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
     return fps if fps > 0 else None
 
 
 def find_video_path(video_id: str) -> Path | None:
-    video_dir = VIDEO_DIR / video_id
-    if not video_dir.exists():
-        return None
-    video_files = [p for p in video_dir.iterdir() if p.suffix.lower() in {".avi", ".mp4", ".mov"}]
-    return video_files[0] if video_files else None
+    return _find_source_video(video_id)
 
 
 class FrameSample(NamedTuple):

@@ -1,4 +1,4 @@
-import { ReactFlow, Background, Controls, MiniMap } from "@xyflow/react";
+import { ReactFlow, Background, Controls } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { CaseFlowNode } from "../../graph/nodeTypes";
 import { nodeTypes } from "../../graph/nodeTypes";
@@ -17,7 +17,7 @@ export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanel
   return (
     <div className="tile tile--graph" data-tile="state-graph">
       <div className="tile__header">
-        <h3>Living State Graph</h3>
+        <h3>Autonomous Current + Predicted State Graph</h3>
         <span className={`tile__status tile__status--${status}`}>{status}</span>
       </div>
       <div className="tile__body tile__body--graph">
@@ -37,7 +37,6 @@ export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanel
           >
             <Background />
             <Controls />
-            <MiniMap pannable zoomable />
           </ReactFlow>
         )}
       </div>

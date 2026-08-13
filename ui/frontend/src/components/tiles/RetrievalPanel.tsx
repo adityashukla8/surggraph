@@ -4,6 +4,11 @@ interface RetrievalPanelProps {
   log: ReasoningLogEntry[];
 }
 
+// UNVERIFIED: agents/imaging, agents/literature, agents/complication_enumeration
+// don't exist yet, so these are guessed names, not confirmed against real
+// source_agent values (the same mistake EventInputPanel.tsx made for
+// Monitor before it was built and this could be checked — see its fix).
+// Re-verify/fix this filter once those agents are real.
 const RETRIEVAL_AGENTS = new Set(["imaging", "literature", "complication_enumeration"]);
 
 export function RetrievalPanel({ log }: RetrievalPanelProps) {

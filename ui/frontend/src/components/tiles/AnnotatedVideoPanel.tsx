@@ -1,8 +1,11 @@
+import type { RefObject } from "react";
+
 interface AnnotatedVideoPanelProps {
   videoUrl?: string;
+  videoRef?: RefObject<HTMLVideoElement | null>;
 }
 
-export function AnnotatedVideoPanel({ videoUrl }: AnnotatedVideoPanelProps) {
+export function AnnotatedVideoPanel({ videoUrl, videoRef }: AnnotatedVideoPanelProps) {
   return (
     <div className="tile" data-tile="annotated-video">
       <div className="tile__header">
@@ -11,7 +14,7 @@ export function AnnotatedVideoPanel({ videoUrl }: AnnotatedVideoPanelProps) {
       </div>
       <div className="tile__body tile__body--center">
         {videoUrl ? (
-          <video src={videoUrl} controls className="tile__video" />
+          <video ref={videoRef} src={videoUrl} controls className="tile__video" />
         ) : (
           <p className="tile__placeholder">
             No annotation overlay loaded — overlay format (masks vs. label strip) is confirmed once the dataset is

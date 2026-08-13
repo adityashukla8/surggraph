@@ -48,9 +48,17 @@ def apply_state_patch(
         raise ValueError("apply_state_patch requires a node or an edge")
 
     op = "add_node" if node is not None else "add_edge"
+    state_service_url = os.environ.get("STATE_SERVICE_URL")
+
+    # `seq` here is a placeholder, not a claim: the real state service is the
+    # sole authority for ordering (services/state_service/store.py always
+    # overwrites it) — sending a locally-incremented value that looks
+    # meaningful but gets discarded would be its own small dishonesty. Only
+    # the local-file fallback path (no server, single writer) treats this
+    # counter as real.
     event = StateDiffEvent(
         case_id=case_id,
-        seq=_next_seq(case_id),
+        seq=0,
         op=op,
         node=node,
         edge=edge,
@@ -59,13 +67,15 @@ def apply_state_patch(
         source_tool=source_tool or (node.source_tool if node else edge.source_tool),
     )
 
-    state_service_url = os.environ.get("STATE_SERVICE_URL")
     if state_service_url:
         resp = requests.post(f"{state_service_url}/state/{case_id}/patch", json=event.model_dump(mode="json"), timeout=10)
         resp.raise_for_status()
-    else:
-        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_local_fallback_path(case_id), "a") as f:
-            f.write(event.model_dump_json() + "\n")
+        # The server's response is authoritative (real seq assigned there) —
+        # returning our own pre-request copy would silently misreport it.
+        return StateDiffEvent.model_validate(resp.json())
 
+    event = event.model_copy(update={"seq": _next_seq(case_id)})
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_local_fallback_path(case_id), "a") as f:
+        f.write(event.model_dump_json() + "\n")
     return event

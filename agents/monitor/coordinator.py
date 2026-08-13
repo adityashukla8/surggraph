@@ -34,7 +34,7 @@ Monitor through the standard ADK flow during the live demo.
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Awaitable, Callable
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
@@ -229,12 +229,21 @@ async def run_monitor_sweep(
     window_s: float = 10.0,
     max_concurrent_windows: int = 6,
     annotations: ErrorAnnotations | None = None,
+    on_window_complete: Callable[[MonitorWindowAssessment], Awaitable[None]] | None = None,
 ) -> list[MonitorWindowAssessment]:
     """Runs the full 2-pass detection pipeline over every window in
     [start_s, end_s). `annotations` is only used to derive the real
     sample-rate-based window grid (tools/sedmamba_labels.py) — never to
     decide any window's outcome; pass an already-loaded ErrorAnnotations to
-    avoid re-reading the pickle on every call."""
+    avoid re-reading the pickle on every call.
+
+    `on_window_complete`, if given, is awaited as EACH window finishes
+    (via asyncio.as_completed, not only after the whole sweep) — this is
+    what lets a caller (agents/monitor/agent.py) stream every sub-agent's
+    real input/output onto the graph in real time, not just the final
+    fired result batched at the end. The offline validation sweep
+    (scripts/run_monitor_validation_sweep.py) doesn't pass this — it never
+    touches the graph."""
     ann = annotations or load_error_annotations(video_id)
     windows = generate_windows(ann, window_s=window_s, stride_s=stride_s, start_s=start_s, end_s=end_s)
 
@@ -244,7 +253,14 @@ async def run_monitor_sweep(
         async with semaphore:
             return await run_monitor_window(video_id, window)
 
-    return await asyncio.gather(*(bounded(w) for w in windows))
+    tasks = [asyncio.ensure_future(bounded(w)) for w in windows]
+    results: list[MonitorWindowAssessment] = []
+    for coro in asyncio.as_completed(tasks):
+        assessment = await coro
+        results.append(assessment)
+        if on_window_complete is not None:
+            await on_window_complete(assessment)
+    return results
 
 
 def build_divergence_event(case_id: str, assessment: MonitorWindowAssessment, phase: str) -> DivergenceEvent:

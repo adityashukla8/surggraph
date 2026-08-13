@@ -4,6 +4,11 @@ interface ActionLogPanelProps {
   log: ReasoningLogEntry[];
 }
 
+// UNVERIFIED: agents/action_router, agents/verifier don't exist yet, so
+// these are guessed names, not confirmed against real source_agent values
+// (the same mistake EventInputPanel.tsx made for Monitor before it was
+// built and this could be checked — see its fix). Re-verify/fix this
+// filter once those agents are real.
 const ROUTING_AGENTS = new Set(["action_router", "verifier"]);
 
 export function ActionLogPanel({ log }: ActionLogPanelProps) {

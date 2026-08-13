@@ -33,10 +33,22 @@ function CaseEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targ
   const [edgePath] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   const style = edgeStyle(data);
   const confirmDot = data?.confirmationSignal ? CONFIRMATION_STATUS_COLOR[data.confirmationSignal] : undefined;
+  const tooltip = data ? `${data.sourceAgent}${data.reason ? `\n${data.reason}` : ""}` : undefined;
 
   return (
     <>
       <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
+      {/* Wider invisible hit-area carrying a native tooltip, drawn on top of
+          BaseEdge's own interaction path (BaseEdge always renders its hit
+          area last, so an earlier sibling never receives hover) — this is
+          what lets the graph itself double as the traceability panel:
+          hovering any edge shows the real agent + its actual reasoning
+          text, not just a colored line. */}
+      {tooltip && (
+        <path d={edgePath} fill="none" stroke="transparent" strokeWidth={20}>
+          <title>{tooltip}</title>
+        </path>
+      )}
       {confirmDot && data?.edgeKind === "predicted" && data.confirmationSignal !== "pending" && (
         <circle
           cx={(sourceX + targetX) / 2}

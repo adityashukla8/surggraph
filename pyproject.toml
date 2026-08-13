@@ -20,6 +20,7 @@ dependencies = [
     "opencv-python-headless",
     "python-dotenv",
     "sse-starlette",
+    "imageio-ffmpeg>=0.6.0",
 ]
 
 [dependency-groups]

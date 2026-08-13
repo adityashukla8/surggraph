@@ -6,13 +6,18 @@ interface EventInputPanelProps {
   onSubmit: (text: string) => Promise<void> | void;
 }
 
-const MONITOR_AGENT = "monitor";
+// Matches the real naming convention in agents/monitor/agent.py
+// (monitor_coordinator, monitor_temporal, monitor_spatial, monitor_procedural)
+// — a prefix check on the actual verified convention, not a guessed exact
+// string (an earlier version hardcoded "monitor", which never matched any
+// real source_agent value the Monitor Agent actually emits).
+const MONITOR_AGENT_PREFIX = "monitor";
 
 export function EventInputPanel({ log, onSubmit }: EventInputPanelProps) {
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const monitorEvents = log.filter((e) => e.source_agent === MONITOR_AGENT);
+  const monitorEvents = log.filter((e) => e.source_agent.startsWith(MONITOR_AGENT_PREFIX));
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
