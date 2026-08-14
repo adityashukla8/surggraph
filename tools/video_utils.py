@@ -82,6 +82,70 @@ def find_video_path(video_id: str) -> Path | None:
     return _find_source_video(video_id)
 
 
+def find_video_duration_s(video_id: str) -> float | None:
+    """Real total duration, read directly from the source file (frame count
+    / fps) — used as the honest default upper bound for a sweep when a
+    caller doesn't supply an explicit end_s (agents/scene_graph_builder)."""
+    path = _find_source_video(video_id)
+    if path is None:
+        return None
+    cap = cv2.VideoCapture(str(path))
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    if frame_count <= 0 or fps <= 0:
+        return None
+    return frame_count / fps
+
+
+def format_video_time(seconds: float) -> str:
+    """m:ss, matching the native <video> player's own time display
+    (VideoPanel shows "0:00 / 4:31") — so a time shown on the graph and a
+    time shown on the video tile read as the same clock, both derived from
+    the real fps, never a hardcoded frame rate. Extracted here once both
+    agents/monitor and agents/scene_graph_builder needed the identical
+    formatting — real reuse, not speculative."""
+    total = max(0, round(seconds))
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def format_video_time_range(start_s: float, end_s: float) -> str:
+    return f"{format_video_time(start_s)}–{format_video_time(end_s)}"
+
+
+class VideoWindow(NamedTuple):
+    window_id: str
+    start_s: float
+    end_s: float
+    start_frame: int
+    end_frame: int
+
+
+def generate_nonoverlapping_windows(start_s: float, end_s: float, window_s: float, fps: float, id_prefix: str) -> list[VideoWindow]:
+    """Simple non-overlapping chunks across [start_s, end_s) — real frame
+    boundaries derived from the real fps, never hardcoded frame counts.
+    Shared by Scene Graph Builder and Anticipation, whose windowing needs
+    are identical (unlike Monitor's heavy-overlap CARES-style grid, which
+    stays its own thing in tools/sedmamba_labels.py::generate_windows)."""
+    windows: list[VideoWindow] = []
+    t = start_s
+    idx = 0
+    while t < end_s:
+        w_end = min(t + window_s, end_s)
+        windows.append(
+            VideoWindow(
+                window_id=f"{id_prefix}-w{idx:04d}",
+                start_s=t,
+                end_s=w_end,
+                start_frame=round(t * fps),
+                end_frame=round(w_end * fps),
+            )
+        )
+        t += window_s
+        idx += 1
+    return windows
+
+
 class FrameSample(NamedTuple):
     frame_number: int
     jpeg_bytes: bytes
@@ -168,13 +232,17 @@ def build_video_window_content(
     fps: float,
     instruction_text: str,
     role: str = "user",
+    extra_parts: list[types.Part] | None = None,
 ) -> types.Content:
     """Native-video equivalent of build_multimodal_content: clips directly
     to [start_s, end_s) via Gemini's own VideoMetadata rather than
     extracting/encoding still frames locally. `fps` controls sampling
     density (valid range (0.0, 24.0], Gemini default 1.0) — see
     agents/monitor/subagents.py::VIDEO_FPS_PROFILE for the per-role values
-    chosen after benchmarking (docs/monitor_agent_video_input_benchmark.md)."""
+    chosen after benchmarking (docs/monitor_agent_video_input_benchmark.md).
+    `extra_parts`, if given, are appended after the video part — e.g.
+    agents/scene_graph_builder's real segmentation-mask image, a second
+    real signal alongside the video window itself."""
     return types.Content(
         role=role,
         parts=[
@@ -183,5 +251,6 @@ def build_video_window_content(
                 file_data=types.FileData(file_uri=gcs_uri, mime_type=mime_type),
                 video_metadata=types.VideoMetadata(fps=fps, start_offset=f"{start_s:.1f}s", end_offset=f"{end_s:.1f}s"),
             ),
+            *(extra_parts or []),
         ],
     )

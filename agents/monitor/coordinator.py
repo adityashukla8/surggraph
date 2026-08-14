@@ -1,7 +1,26 @@
-"""Monitor Agent coordinator (plan §3.5): orchestrates the three real
-sub-agents (agents/monitor/subagents.py) over a sliding window and combines
-their outputs via deterministic risk-routing + weighted aggregation
-(agents/monitor/aggregation.py) — never a 4th LLM call for the arithmetic.
+"""Monitor Agent coordinator (plan §3.5, restructured per docs/latency_optimization.md):
+orchestrates the three real sub-agents (agents/monitor/subagents.py) over a
+sliding window and combines their outputs via deterministic weighted
+aggregation (agents/monitor/aggregation.py) — never a 4th LLM call for the
+arithmetic.
+
+Latency restructuring (2026-08-14, full rationale in docs/latency_optimization.md):
+real per-window latency (median 163s, offline sweep) was dominated by two
+things — native video's real per-call cost, and the screen→escalate→deep
+structure being *sequential*. Fixed by:
+  - Screen tier: switched from native video to still frames (~2.9x cheaper
+    per the benchmark) — it's the tier that always runs, so this is where
+    cost reduction actually matters.
+  - Deep tier: now UNCONDITIONAL across all 6 error categories (not gated
+    on screen's escalation choice) at a FIXED "attending" tier (dropping
+    Ψ-based tier routing — the plan's own cut-order already flagged this as
+    ~3% accuracy impact, now cut for latency instead of schedule reasons).
+    Still native video — that's where its real accuracy value is.
+  - Screen and deep run CONCURRENTLY (asyncio.gather), not sequentially —
+    a window's wall time is max(screen, deep) instead of screen + deep.
+  - Net: every window now gets a real verdict on all 6 categories (more
+    thorough than before, not less), at real added cost, for a real
+    latency win on the dimension that mattered (wall clock).
 
 `MonitorCoordinatorAgent` is a `BaseAgent` subclass, not an `LlmAgent` and
 not `ParallelAgent`. Verified directly against the installed ADK 2.6.3 this
@@ -10,23 +29,20 @@ session:
     in favor of Workflow and will be removed in a future version").
   - `BaseAgent`/`_run_async_impl` carry NO deprecation marker, and
     `BaseAgent.run_async` genuinely calls `self._run_async_impl(ctx)` — this
-    is the live, current extension point, not a legacy-bypassed one (the
-    "Workflow Graph engine bypasses legacy overrides" warning found during
-    research applies only to the separate, opt-in `Workflow`/`Node`/`Edge`
-    graph primitives, not to standard `BaseAgent` subclassing).
+    is the live, current extension point, not a legacy-bypassed one.
   - `BaseAgent.sub_agents: list[BaseAgent]` is a real field — declaring the
     three SCREEN-mode sub-agents there gives Registry/Observability tooling
-    genuine children to see. DEEP-mode sub-agents are built fresh per
-    escalation (their prompt depends on the escalated category + tier, so a
-    fixed instance doesn't make sense) and invoked directly, same pattern,
-    just not part of the fixed `sub_agents` list.
+    genuine children to see. DEEP-mode sub-agents are cached separately
+    (one per role×category — 18 total, fixed tier means they're stable
+    across windows now) and invoked directly, same pattern, just not part
+    of the fixed `sub_agents` list.
 
 The heavy lifting lives in plain async module-level functions
 (`run_monitor_window`, `run_monitor_sweep`) rather than being locked inside
 `_run_async_impl` — `scripts/run_monitor_validation_sweep.py` calls
-`run_monitor_sweep` directly as a library function for a 262-window offline
-batch (going through a full ADK InvocationContext per window would be pure
-overhead for that case), while `MonitorCoordinatorAgent._run_async_impl`
+`run_monitor_sweep` directly as a library function for the full-video
+offline batch (going through a full ADK InvocationContext per window would
+be pure overhead for that case), while `MonitorCoordinatorAgent._run_async_impl`
 is a thin, genuinely-functional adapter for when Orchestrator invokes
 Monitor through the standard ADK flow during the live demo.
 """
@@ -39,34 +55,77 @@ from typing import AsyncGenerator, Awaitable, Callable
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
-from google.adk.runners import InMemoryRunner
 from google.genai import types
 from pydantic import BaseModel
 
-from agents.monitor.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate, pick_escalation_candidate
-from agents.monitor.knowledge import compute_psi, route_tier
+from agents.monitor.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate
+from agents.monitor.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi
 from agents.monitor.subagents import (
+    SCREEN_STILL_FRAME_PROFILE,
     VIDEO_FPS_PROFILE,
     DeepOutput,
     ScreenOutput,
     build_subagent,
 )
 from state.schema import DivergenceEvent, ErrorCategory, ExpertiseTier, MonitorSubAgentAssessment, SubAgentRole
+from tools.adk_runner import run_llm_agent_once
 from tools.sedmamba_labels import ErrorAnnotations, MonitorWindow, generate_windows, load_error_annotations
-from tools.video_utils import build_video_window_content, find_video_gcs_uri, video_mime_type
+from tools.video_utils import (
+    build_multimodal_content,
+    build_video_window_content,
+    find_video_gcs_uri,
+    find_video_path,
+    sample_frames,
+    video_mime_type,
+)
 
 _ROLES: list[SubAgentRole] = ["temporal", "spatial", "procedural"]
+_CATEGORIES: list[ErrorCategory] = list(ERROR_KNOWLEDGE_LIBRARY.keys())
+_FIXED_DEEP_TIER: ExpertiseTier = "attending"
 
-# Built once — the screen-mode instruction is role-only (not window/category
+# Built once — the screen-mode instruction is role-only (not window-
 # specific), so every window's screen pass reuses these same three agents.
-# These are also what MonitorCoordinatorAgent.sub_agents declares.
+# NOT what MonitorCoordinatorAgent.sub_agents declares — an ADK agent
+# instance can only ever have one parent, permanently (confirmed: a second
+# MonitorCoordinatorAgent() construction raises a real pydantic
+# ValidationError — "already has a parent agent" — if sub_agents reuses
+# these same singletons). __init__ below builds fresh, identically-
+# configured instances for that declaration instead.
 _SCREEN_AGENTS = {role: build_subagent(role, mode="screen") for role in _ROLES}
+
+# Built once too — the deep-mode instruction now only varies by role and
+# category (tier is fixed at "attending"), so these 18 (3 roles x 6
+# categories) are stable across every window, not rebuilt per call like
+# when tier used to vary per escalation.
+_DEEP_AGENTS = {
+    (role, category): build_subagent(role, mode="deep", tier=_FIXED_DEEP_TIER, category=category)
+    for role in _ROLES
+    for category in _CATEGORIES
+}
+
+
+class CategoryResult(BaseModel):
+    """One error category's real, independent verdict for a window — the
+    unconditional-deep-pass replacement for the old single `escalated_category`
+    shape. A window can have zero, one, or several of these fire true now."""
+
+    composite_score: float
+    is_divergence: bool
+    assessments: list[MonitorSubAgentAssessment]
 
 
 class MonitorWindowAssessment(BaseModel):
-    """Internal result of running the full 2-pass pipeline on one window —
-    richer than the CaseState-facing DivergenceEvent (which is only built
-    for windows that actually fire; see build_divergence_event)."""
+    """Internal result of running the full pipeline on one window — richer
+    than the CaseState-facing DivergenceEvent(s) (only built for categories
+    that actually fired; see build_divergence_events).
+
+    `category_results` holds every category's real, independent verdict
+    (new). The scalar `escalated_category`/`psi`/`tier_used`/`composite_score`
+    fields are kept for schema/caller stability — they summarize the
+    highest-scoring category (whichever fired with the largest margin, or
+    the highest-scoring category overall if none fired) rather than
+    reflecting a screen-pass escalation choice, since deep now runs
+    unconditionally for all categories."""
 
     window_id: str
     start_frame: int
@@ -78,42 +137,45 @@ class MonitorWindowAssessment(BaseModel):
     composite_score: float
     threshold_used: float
     is_divergence: bool
+    category_results: dict[str, CategoryResult]
 
 
 # Caps TOTAL concurrent Gemini calls across every window/pass in a sweep.
 # Retry-with-backoff on 429 is handled at the SDK level (tools/gemini_model.py's
 # HttpRetryOptions, applied to every agent's client) — this semaphore is
 # defense-in-depth to reduce how often Dynamic Shared Quota contention
-# happens in the first place, since per-window concurrency (3 agents) times
-# per-sweep window concurrency (max_concurrent_windows) otherwise has no
-# combined bound.
-_GEMINI_CONCURRENCY = asyncio.Semaphore(4)
+# happens in the first place. Raised from 4 (docs/latency_optimization.md —
+# cost is now explicitly acceptable in exchange for latency; real quota
+# contention is confirmed to start around 3-4 concurrent calls, so this
+# still relies on the SDK-level retry/backoff to absorb the overage rather
+# than assuming a higher ceiling exists).
+_GEMINI_CONCURRENCY = asyncio.Semaphore(12)
 
 
 async def _run_agent_once(agent, content: types.Content, output_model: type[BaseModel]) -> BaseModel:
     async with _GEMINI_CONCURRENCY:
-        runner = InMemoryRunner(agent=agent, app_name="surggraph_monitor")
-        session = await runner.session_service.create_session(app_name="surggraph_monitor", user_id="monitor")
-        final_text: str | None = None
-        async for event in runner.run_async(user_id="monitor", session_id=session.id, new_message=content):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if getattr(part, "text", None):
-                        final_text = part.text
-    if final_text is None:
-        raise RuntimeError(f"{agent.name} produced no text output")
-    return output_model.model_validate_json(final_text)
+        return await run_llm_agent_once(agent, content, output_model, app_name="surggraph_monitor")
 
 
-async def _run_screen_pass(gcs_uri: str, mime_type: str, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
+async def _run_screen_pass_stills(video_id: str, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
+    """Cheap, fast tier — still frames, not native video (docs/latency_optimization.md:
+    real ~2.9x per-call latency win, confirmed via docs/monitor_agent_video_input_benchmark.md)."""
+    video_path = find_video_path(video_id)
+    if video_path is None:
+        raise FileNotFoundError(f"no local source video found for {video_id!r}")
+
     async def one(role: SubAgentRole) -> tuple[SubAgentRole, ScreenOutput]:
-        content = build_video_window_content(
-            gcs_uri,
-            mime_type,
-            start_s=window.start_s,
-            end_s=window.end_s,
-            fps=VIDEO_FPS_PROFILE[role],
+        profile = SCREEN_STILL_FRAME_PROFILE[role]
+        frames = sample_frames(
+            video_path,
+            start_frame=window.start_frame,
+            end_frame=window.end_frame,
+            n_frames=profile["n_frames"],
+            resize_to=profile["resize_to"],
+        )
+        content = build_multimodal_content(
             instruction_text=f"Analyze this ~{window.end_s - window.start_s:.0f}s window (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
+            frames=frames,
         )
         result = await _run_agent_once(_SCREEN_AGENTS[role], content, ScreenOutput)
         return role, result
@@ -122,24 +184,31 @@ async def _run_screen_pass(gcs_uri: str, mime_type: str, window: MonitorWindow) 
     return dict(results)
 
 
-async def _run_deep_pass(
-    gcs_uri: str, mime_type: str, window: MonitorWindow, category: ErrorCategory, tier: ExpertiseTier
-) -> dict[SubAgentRole, DeepOutput]:
-    async def one(role: SubAgentRole) -> tuple[SubAgentRole, DeepOutput]:
+async def _run_deep_pass_all_categories(
+    gcs_uri: str, mime_type: str, window: MonitorWindow
+) -> dict[ErrorCategory, dict[SubAgentRole, DeepOutput]]:
+    """Expensive, accurate tier — native video, now UNCONDITIONAL across all
+    6 categories (not gated on screen's escalation choice) at a fixed
+    'attending' tier. 18 real parallel calls per window (3 roles x 6
+    categories) — real added cost, accepted for latency (docs/latency_optimization.md)."""
+
+    async def one(role: SubAgentRole, category: ErrorCategory) -> tuple[ErrorCategory, SubAgentRole, DeepOutput]:
         content = build_video_window_content(
             gcs_uri,
             mime_type,
             start_s=window.start_s,
             end_s=window.end_s,
             fps=VIDEO_FPS_PROFILE[role],
-            instruction_text=f"Deep review, category={category}, tier={tier} (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
+            instruction_text=f"Deep review, category={category}, tier={_FIXED_DEEP_TIER} (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
         )
-        agent = build_subagent(role, mode="deep", tier=tier, category=category)
-        result = await _run_agent_once(agent, content, DeepOutput)
-        return role, result
+        result = await _run_agent_once(_DEEP_AGENTS[(role, category)], content, DeepOutput)
+        return category, role, result
 
-    results = await asyncio.gather(*(one(role) for role in _ROLES))
-    return dict(results)
+    flat = await asyncio.gather(*(one(role, category) for role in _ROLES for category in _CATEGORIES))
+    by_category: dict[ErrorCategory, dict[SubAgentRole, DeepOutput]] = {c: {} for c in _CATEGORIES}
+    for category, role, result in flat:
+        by_category[category][role] = result
+    return by_category
 
 
 async def run_monitor_window(
@@ -153,71 +222,56 @@ async def run_monitor_window(
         raise FileNotFoundError(f"no video found in GCS for {video_id} — upload it first (see docs/monitor_agent_video_input_benchmark.md)")
     mime_type = video_mime_type(gcs_uri)
 
-    screen_results = await _run_screen_pass(gcs_uri, mime_type, window)
-
-    category_confidences = [
-        {op.category: op.confidence for op in screen.opinions if op.suspected} for screen in screen_results.values()
-    ]
-    escalated_category = pick_escalation_candidate(category_confidences)
-
-    assessments: list[MonitorSubAgentAssessment] = []
-
-    if escalated_category is not None:
-        psi = compute_psi(escalated_category)
-        tier = route_tier(psi)
-        deep_results = await _run_deep_pass(gcs_uri, mime_type, window, escalated_category, tier)
-        o_values = {role: deep_results[role].error_present for role in _ROLES}
-        for role in _ROLES:
-            deep = deep_results[role]
-            assessments.append(
-                MonitorSubAgentAssessment(
-                    agent_role=role,
-                    tier_used=tier,
-                    error_present=deep.error_present,
-                    confidence=deep.confidence,
-                    reasoning=deep.reasoning,
-                    frames_examined=[window.start_frame, window.end_frame],
-                )
-            )
-    else:
-        psi = None
-        tier = None
-        # No category cleared the escalation bar — the screen-pass `suspected`
-        # booleans stand in as the final O values (disclosed via psi/tier_used
-        # being None, per plan §3.5).
-        o_values = {}
-        for role in _ROLES:
-            screen = screen_results[role]
-            suspected_any = any(op.suspected for op in screen.opinions)
-            top_conf = max((op.confidence for op in screen.opinions if op.suspected), default=0.0)
-            o_values[role] = suspected_any
-            top_obs = next((op.observation for op in screen.opinions if op.suspected), "no category suspected")
-            assessments.append(
-                MonitorSubAgentAssessment(
-                    agent_role=role,
-                    tier_used="resident",  # screen pass has no tier framing; resident is the conservative default label
-                    error_present=suspected_any,
-                    confidence=top_conf,
-                    reasoning=top_obs,
-                    frames_examined=[window.start_frame, window.end_frame],
-                )
-            )
-
-    composite_score, is_divergence = aggregate(
-        o_values["temporal"], o_values["spatial"], o_values["procedural"], alpha=alpha_weights, threshold=threshold
+    # Screen (still frames) and deep (native video, all categories) run
+    # CONCURRENTLY, not sequentially — a window's wall time is max(screen,
+    # deep) instead of screen + deep (docs/latency_optimization.md). Screen's
+    # own opinions aren't consumed further here (deep is unconditional now);
+    # it still runs because it's the cheap tier that populates the graph
+    # fast, and agents/monitor/agent.py's real-time traceability uses it.
+    _screen_results, deep_by_category = await asyncio.gather(
+        _run_screen_pass_stills(video_id, window),
+        _run_deep_pass_all_categories(gcs_uri, mime_type, window),
     )
+
+    category_results: dict[str, CategoryResult] = {}
+    for category in _CATEGORIES:
+        role_outputs = deep_by_category[category]
+        o_values = {role: role_outputs[role].error_present for role in _ROLES}
+        composite_score, is_divergence = aggregate(
+            o_values["temporal"], o_values["spatial"], o_values["procedural"], alpha=alpha_weights, threshold=threshold
+        )
+        assessments = [
+            MonitorSubAgentAssessment(
+                agent_role=role,
+                tier_used=_FIXED_DEEP_TIER,
+                error_present=role_outputs[role].error_present,
+                confidence=role_outputs[role].confidence,
+                reasoning=role_outputs[role].reasoning,
+                frames_examined=[window.start_frame, window.end_frame],
+            )
+            for role in _ROLES
+        ]
+        category_results[category] = CategoryResult(composite_score=composite_score, is_divergence=is_divergence, assessments=assessments)
+
+    fired = {c: r for c, r in category_results.items() if r.is_divergence}
+    top_category = max(fired, key=lambda c: fired[c].composite_score) if fired else max(
+        category_results, key=lambda c: category_results[c].composite_score
+    )
+    top_result = category_results[top_category]
+    psi = compute_psi(top_category)  # informational now — no longer gates which tier runs
 
     return MonitorWindowAssessment(
         window_id=window.window_id,
         start_frame=window.start_frame,
         end_frame=window.end_frame,
-        sub_agent_assessments=assessments,
-        escalated_category=escalated_category,
+        sub_agent_assessments=top_result.assessments,
+        escalated_category=top_category,
         psi=psi,
-        tier_used=tier,
-        composite_score=composite_score,
+        tier_used=_FIXED_DEEP_TIER,
+        composite_score=top_result.composite_score,
         threshold_used=threshold,
-        is_divergence=is_divergence,
+        is_divergence=bool(fired),
+        category_results=category_results,
     )
 
 
@@ -231,17 +285,17 @@ async def run_monitor_sweep(
     annotations: ErrorAnnotations | None = None,
     on_window_complete: Callable[[MonitorWindowAssessment], Awaitable[None]] | None = None,
 ) -> list[MonitorWindowAssessment]:
-    """Runs the full 2-pass detection pipeline over every window in
-    [start_s, end_s). `annotations` is only used to derive the real
-    sample-rate-based window grid (tools/sedmamba_labels.py) — never to
-    decide any window's outcome; pass an already-loaded ErrorAnnotations to
-    avoid re-reading the pickle on every call.
+    """Runs the full detection pipeline over every window in [start_s, end_s).
+    `annotations` is only used to derive the real sample-rate-based window
+    grid (tools/sedmamba_labels.py) — never to decide any window's outcome;
+    pass an already-loaded ErrorAnnotations to avoid re-reading the pickle
+    on every call.
 
-    `on_window_complete`, if given, is awaited as EACH window finishes
-    (via asyncio.as_completed, not only after the whole sweep) — this is
-    what lets a caller (agents/monitor/agent.py) stream every sub-agent's
-    real input/output onto the graph in real time, not just the final
-    fired result batched at the end. The offline validation sweep
+    `on_window_complete`, if given, is awaited as EACH window finishes (via
+    asyncio.as_completed, not only after the whole sweep) — this is what
+    lets a caller (agents/monitor/agent.py) stream every sub-agent's real
+    input/output onto the graph in real time, not just the final fired
+    result batched at the end. The offline validation sweep
     (scripts/run_monitor_validation_sweep.py) doesn't pass this — it never
     touches the graph."""
     ann = annotations or load_error_annotations(video_id)
@@ -263,30 +317,40 @@ async def run_monitor_sweep(
     return results
 
 
-def build_divergence_event(case_id: str, assessment: MonitorWindowAssessment, phase: str) -> DivergenceEvent:
-    return DivergenceEvent(
-        case_id=case_id,
-        window_id=assessment.window_id,
-        frame=assessment.start_frame,
-        window_start_frame=assessment.start_frame,
-        window_end_frame=assessment.end_frame,
-        phase=phase,
-        error_category=assessment.escalated_category or "manual_injection",
-        source="monitor_agentic_detection",
-        sub_agent_assessments=assessment.sub_agent_assessments,
-        psi=assessment.psi,
-        tier_used=assessment.tier_used,
-        composite_score=assessment.composite_score,
-        threshold_used=assessment.threshold_used,
-        confidence=max((a.confidence for a in assessment.sub_agent_assessments), default=0.0),
-        reasoning_trace=(
-            f"composite_score={assessment.composite_score:.2f} vs threshold={assessment.threshold_used:.2f}; "
-            f"{sum(1 for a in assessment.sub_agent_assessments if a.error_present)}/3 agents flagged "
-            f"'{assessment.escalated_category}'"
-        ),
-        source_agent="monitor_coordinator",
-        source_tool="run_monitor_window",
-    )
+def build_divergence_events(case_id: str, assessment: MonitorWindowAssessment, phase: str) -> list[DivergenceEvent]:
+    """One real DivergenceEvent per category that actually fired this window
+    — a window can now have zero, one, or several (unconditional deep pass
+    across all 6 categories, docs/latency_optimization.md), unlike the old
+    single-escalated-category design."""
+    events: list[DivergenceEvent] = []
+    for category, result in assessment.category_results.items():
+        if not result.is_divergence:
+            continue
+        events.append(
+            DivergenceEvent(
+                case_id=case_id,
+                window_id=assessment.window_id,
+                frame=assessment.start_frame,
+                window_start_frame=assessment.start_frame,
+                window_end_frame=assessment.end_frame,
+                phase=phase,
+                error_category=category,
+                source="monitor_agentic_detection",
+                sub_agent_assessments=result.assessments,
+                psi=compute_psi(category),
+                tier_used=_FIXED_DEEP_TIER,
+                composite_score=result.composite_score,
+                threshold_used=assessment.threshold_used,
+                confidence=max((a.confidence for a in result.assessments), default=0.0),
+                reasoning_trace=(
+                    f"composite_score={result.composite_score:.2f} vs threshold={assessment.threshold_used:.2f}; "
+                    f"{sum(1 for a in result.assessments if a.error_present)}/3 agents flagged '{category}'"
+                ),
+                source_agent="monitor_coordinator",
+                source_tool="run_monitor_window",
+            )
+        )
+    return events
 
 
 class MonitorCoordinatorAgent(BaseAgent):
@@ -296,7 +360,10 @@ class MonitorCoordinatorAgent(BaseAgent):
     inside _run_async_impl."""
 
     def __init__(self, name: str = "monitor_coordinator"):
-        super().__init__(name=name, sub_agents=list(_SCREEN_AGENTS.values()))
+        # Fresh, identically-configured instances — not _SCREEN_AGENTS.values()
+        # (see that dict's own comment: reusing those singletons here breaks
+        # the moment MonitorCoordinatorAgent is constructed a second time).
+        super().__init__(name=name, sub_agents=[build_subagent(role, mode="screen") for role in _ROLES])
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
@@ -311,7 +378,7 @@ class MonitorCoordinatorAgent(BaseAgent):
             return
 
         # Deferred import: agents/monitor/agent.py imports FROM this module
-        # (MonitorWindowAssessment, build_divergence_event, run_monitor_sweep),
+        # (MonitorWindowAssessment, build_divergence_events, run_monitor_sweep),
         # so importing monitor_case at module level here would be circular.
         # This is the one place the "proper" ADK-invocation path needs it —
         # calling run_monitor_sweep directly (as an earlier version of this

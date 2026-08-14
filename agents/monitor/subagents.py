@@ -152,16 +152,27 @@ def build_subagent(
     raise ValueError(f"unknown mode: {mode!r}")
 
 
-# Native-video sampling density per role, applied to the same window (plan
-# §3.5, migrated per docs/monitor_agent_video_input_benchmark.md — replaces
-# the earlier still-frame FRAME_SAMPLING_PROFILE). Temporal wants dense
-# sampling to see motion/hesitation trend (fps=5.0 matches the benchmarked
-# accuracy sweet spot for motion-sensitive tasks); Spatial and Procedural
-# want fewer frame-equivalents over the same 10s window, mirroring their
-# original "fewer frames" intent (media_resolution tuning for Spatial's
-# positional-precision need is an open follow-up, not yet benchmarked).
+# Native-video sampling density per role, applied to the DEEP (accurate,
+# expensive) tier only as of the latency restructuring (docs/latency_optimization.md)
+# — was applied to both tiers before that. Temporal wants dense sampling to
+# see motion/hesitation trend (fps=5.0 matches the benchmarked accuracy
+# sweet spot for motion-sensitive tasks); Spatial and Procedural want fewer
+# frame-equivalents over the same 10s window, mirroring their original
+# "fewer frames" intent (media_resolution tuning for Spatial's positional-
+# precision need is an open follow-up, not yet benchmarked).
 VIDEO_FPS_PROFILE: dict[SubAgentRole, float] = {
     "temporal": 5.0,
     "spatial": 0.4,
     "procedural": 0.6,
+}
+
+# Still-frame sampling for the SCREEN (cheap, fast) tier — real, previously-
+# designed values from before the native-video migration, reused now that
+# the screen tier is back to still frames for latency (docs/latency_optimization.md,
+# confirmed ~2.9x faster than native video for the same window). resize_to
+# of None means native resolution.
+SCREEN_STILL_FRAME_PROFILE: dict[SubAgentRole, dict] = {
+    "temporal": {"n_frames": 10, "resize_to": (960, 540)},
+    "spatial": {"n_frames": 4, "resize_to": None},
+    "procedural": {"n_frames": 6, "resize_to": None},
 }

@@ -43,25 +43,12 @@ import numpy as np
 from dotenv import load_dotenv
 from google.cloud import storage as gcs_storage
 
+from tools.segmentation_masks import colorize_mask, load_mask_index
+
 load_dotenv()
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-
-
-def _hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
-    r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
-    return (b, g, r)
-
-
-# Same hex values as ui/frontend/src/index.css's light-mode --series-1..8
-# (mirrored here since this Python script can't read CSS custom
-# properties) — reused only for visual consistency with the rest of the
-# app, not a claim about class identity. All 8 slots, matching the real
-# 8 non-background classes found across the annotation files (never a
-# subset chosen from one sample frame).
-_SERIES_HEX = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
-CLASS_COLORS_BGR = {class_id: _hex_to_bgr(hex_color) for class_id, hex_color in enumerate(_SERIES_HEX, start=1)}
 OVERLAY_ALPHA = 0.45
 
 
@@ -81,26 +68,6 @@ def transcode_raw(video_id: str) -> Path:
     )
     print(f"  -> {dst} ({dst.stat().st_size / 1e6:.1f} MB)")
     return dst
-
-
-def load_mask_index(video_id: str) -> dict[int, Path]:
-    seg_dir = DATA_ROOT / "annotations" / video_id / "segmentation"
-    masks = {}
-    for path in seg_dir.glob("*.png"):
-        frame_number = int(path.stem)
-        masks[frame_number] = path
-    return dict(sorted(masks.items()))
-
-
-def colorize_mask(mask: np.ndarray) -> np.ndarray:
-    """mask: single-channel (or repeated-3-channel) class-index array.
-    Returns a BGR color image, background (class 0) left black."""
-    if mask.ndim == 3:
-        mask = mask[:, :, 0]
-    color = np.zeros((*mask.shape, 3), dtype=np.uint8)
-    for class_id, bgr in CLASS_COLORS_BGR.items():
-        color[mask == class_id] = bgr
-    return color
 
 
 def composite_annotated(video_id: str) -> Path:

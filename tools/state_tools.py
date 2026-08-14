@@ -20,7 +20,7 @@ from pathlib import Path
 
 import requests
 
-from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent
+from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent, StateSnapshot
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 RUNTIME_DIR = DATA_ROOT / "runtime"
@@ -37,8 +37,21 @@ def _local_fallback_path(case_id: str) -> Path:
     return RUNTIME_DIR / f"{case_id}_graph_patches.jsonl"
 
 
+_HTTP_TIMEOUT_S = 30
+# Real finding (Anticipation Agent's end-to-end test, once it became a
+# third concurrent writer alongside Monitor's own 21-call/window fan-out):
+# every write to the same case_id serializes through one Firestore
+# document's transaction (the real, single-document `seq` counter,
+# services/state_service/store.py) — under real contention, that
+# transaction's own 5-attempt retry/backoff can legitimately take longer
+# than a tight client timeout, producing a client-side ReadTimeout even
+# though the server would have succeeded given more time. 10s was too
+# tight once three agents write concurrently; not a symptom of a stuck
+# server (confirmed idle-latency stayed sub-100ms in the same session).
+
+
 def _post_patch_sync(state_service_url: str, case_id: str, event: StateDiffEvent) -> StateDiffEvent:
-    resp = requests.post(f"{state_service_url}/state/{case_id}/patch", json=event.model_dump(mode="json"), timeout=10)
+    resp = requests.post(f"{state_service_url}/state/{case_id}/patch", json=event.model_dump(mode="json"), timeout=_HTTP_TIMEOUT_S)
     resp.raise_for_status()
     # The server's response is authoritative (real seq assigned there) —
     # returning our own pre-request copy would silently misreport it.
@@ -95,3 +108,50 @@ async def apply_state_patch(
         return await asyncio.to_thread(_post_patch_sync, state_service_url, case_id, event)
 
     return await asyncio.to_thread(_write_local_fallback_sync, case_id, event)
+
+
+# --- Read path — Anticipation Agent's get_state_snapshot() tool needs to see
+# what other agents have already written (plan §2's get_recent_window_state
+# tool spec, agents/anticipation/agent.py's reconciliation pass) ------------
+
+
+def _item_key(event: StateDiffEvent) -> str:
+    return f"node:{event.node.node_id}" if event.node is not None else f"edge:{event.edge.edge_id}"
+
+
+def _get_snapshot_sync(state_service_url: str, case_id: str) -> StateSnapshot:
+    resp = requests.get(f"{state_service_url}/state/{case_id}/snapshot", timeout=_HTTP_TIMEOUT_S)
+    resp.raise_for_status()
+    return StateSnapshot.model_validate(resp.json())
+
+
+def _read_local_fallback_snapshot_sync(case_id: str) -> StateSnapshot:
+    """Replays the local JSONL fallback into the same last-write-wins shape
+    services/state_service/store.py's real Firestore-backed snapshot()
+    already produces (dedupe by node_id/edge_id, drop remove_edge'd edges) —
+    so a caller gets identical semantics whether or not STATE_SERVICE_URL is
+    set."""
+    path = _local_fallback_path(case_id)
+    if not path.exists():
+        return StateSnapshot(case_id=case_id, seq=0, nodes=[], edges=[])
+    items: dict[str, StateDiffEvent] = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            event = StateDiffEvent.model_validate_json(line)
+            items[_item_key(event)] = event
+    nodes = [e.node for e in items.values() if e.node is not None]
+    edges = [e.edge for e in items.values() if e.edge is not None and e.op != "remove_edge"]
+    seq = max((e.seq for e in items.values()), default=0)
+    return StateSnapshot(case_id=case_id, seq=seq, nodes=nodes, edges=edges)
+
+
+async def get_state_snapshot(case_id: str) -> StateSnapshot:
+    """`async def`, same dual-path pattern as apply_state_patch: real state
+    service when STATE_SERVICE_URL is set, local JSONL replay otherwise."""
+    state_service_url = os.environ.get("STATE_SERVICE_URL")
+    if state_service_url:
+        return await asyncio.to_thread(_get_snapshot_sync, state_service_url, case_id)
+    return await asyncio.to_thread(_read_local_fallback_snapshot_sync, case_id)

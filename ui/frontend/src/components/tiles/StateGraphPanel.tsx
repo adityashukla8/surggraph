@@ -1,16 +1,36 @@
-import { ReactFlow, Background, Controls } from "@xyflow/react";
+import { useEffect } from "react";
+import { ReactFlow, Background, Controls, Panel, useReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { CaseFlowNode } from "../../graph/nodeTypes";
 import { nodeTypes } from "../../graph/nodeTypes";
 import type { CaseFlowEdge } from "../../graph/edgeTypes";
 import { edgeTypes } from "../../graph/edgeTypes";
 import type { ConnectionStatus } from "../../graph/useCaseStateStream";
+import { GraphLegend } from "../../graph/Legend";
 
 interface StateGraphPanelProps {
   nodes: CaseFlowNode[];
   edges: CaseFlowEdge[];
   status: ConnectionStatus;
   error: string | null;
+}
+
+// Rendered as a child of <ReactFlow>, which is what gives useReactFlow() a
+// valid context here without a separate <ReactFlowProvider> wrapper (the
+// documented @xyflow/react pattern — ReactFlow establishes that context for
+// its own children). Re-fits the viewport whenever the node/edge COUNT
+// changes — a cheap, real proxy for "the graph actually grew," debounced
+// past layout.ts's own 500ms re-layout so this fits to the settled
+// positions, not the ones about to be replaced.
+function AutoFitView({ nodeCount, edgeCount }: { nodeCount: number; edgeCount: number }) {
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      void fitView({ padding: 0.08, duration: 400 });
+    }, 700);
+    return () => clearTimeout(handle);
+  }, [nodeCount, edgeCount, fitView]);
+  return null;
 }
 
 export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanelProps) {
@@ -39,6 +59,10 @@ export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanel
           >
             <Background />
             <Controls />
+            <Panel position="bottom-right">
+              <GraphLegend />
+            </Panel>
+            <AutoFitView nodeCount={nodes.length} edgeCount={edges.length} />
           </ReactFlow>
         )}
       </div>

@@ -78,7 +78,22 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
   const [log, setLog] = useState<ReasoningLogEntry[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const lastSeq = useRef<number>(-1);
+  // Per-KEY (not global) last-applied seq. Real finding: Firestore's
+  // on_snapshot delivers `changes` in whatever order it batches them in —
+  // NOT guaranteed to match our own `seq` field's ascending order, and
+  // with three agents (Monitor/Scene Graph Builder/Anticipation) writing
+  // concurrently, out-of-seq-order delivery within a batch is routine, not
+  // exceptional. A global "next event must be exactly lastSeq+1 or full
+  // resync" policy (the earlier version of this hook) treated normal
+  // reordering as a fatal gap, causing frequent unnecessary resyncs whose
+  // overlapping in-flight fetches could themselves race and leave the
+  // graph showing a stale snapshot — the real cause of edges intermittently
+  // vanishing. Since every patch is a complete, self-contained SET (not a
+  // delta), per-key last-write-wins by seq is correct and reordering-safe:
+  // an older patch arriving late for a node/edge that's already been
+  // updated by a newer one is simply ignored, regardless of arrival order.
+  const nodeSeqById = useRef<Map<string, number>>(new Map());
+  const edgeSeqById = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (caseId === null) {
@@ -93,31 +108,39 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
     function applySnapshot(snapshot: StateSnapshot) {
       setNodesById(new Map(snapshot.nodes.map((n) => [n.node_id, n])));
       setEdgesById(new Map(snapshot.edges.map((e) => [e.edge_id, e])));
-      lastSeq.current = snapshot.seq;
+      // The snapshot itself doesn't carry a per-item seq, only the case's
+      // overall seq as of the fetch — every item in it is at least that
+      // fresh, so any later event with a higher seq legitimately supersedes
+      // it, and any event at or below it is already reflected here.
+      nodeSeqById.current = new Map(snapshot.nodes.map((n) => [n.node_id, snapshot.seq]));
+      edgeSeqById.current = new Map(snapshot.edges.map((e) => [e.edge_id, snapshot.seq]));
     }
 
     function applyDiff(event: StateDiffEvent) {
-      if (event.seq <= lastSeq.current && lastSeq.current !== -1) return; // stale/duplicate
-      if (lastSeq.current !== -1 && event.seq > lastSeq.current + 1) {
-        // gap detected — resync from a fresh snapshot rather than risk a
-        // silently incomplete graph
-        void resync();
-        return;
-      }
-      lastSeq.current = event.seq;
-
       if (event.node && (event.op === "add_node" || event.op === "update_node")) {
-        setNodesById((prev) => new Map(prev).set(event.node!.node_id, event.node!));
+        const prevSeq = nodeSeqById.current.get(event.node.node_id) ?? -1;
+        if (event.seq > prevSeq) {
+          nodeSeqById.current.set(event.node.node_id, event.seq);
+          setNodesById((prev) => new Map(prev).set(event.node!.node_id, event.node!));
+        }
       }
       if (event.edge && (event.op === "add_edge" || event.op === "update_edge")) {
-        setEdgesById((prev) => new Map(prev).set(event.edge!.edge_id, event.edge!));
+        const prevSeq = edgeSeqById.current.get(event.edge.edge_id) ?? -1;
+        if (event.seq > prevSeq) {
+          edgeSeqById.current.set(event.edge.edge_id, event.seq);
+          setEdgesById((prev) => new Map(prev).set(event.edge!.edge_id, event.edge!));
+        }
       }
       if (event.op === "remove_edge" && event.edge) {
-        setEdgesById((prev) => {
-          const next = new Map(prev);
-          next.delete(event.edge!.edge_id);
-          return next;
-        });
+        const prevSeq = edgeSeqById.current.get(event.edge.edge_id) ?? -1;
+        if (event.seq > prevSeq) {
+          edgeSeqById.current.set(event.edge.edge_id, event.seq);
+          setEdgesById((prev) => {
+            const next = new Map(prev);
+            next.delete(event.edge!.edge_id);
+            return next;
+          });
+        }
       }
 
       setLog((prev) =>
@@ -175,7 +198,20 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
   }, [caseId]);
 
   const [layoutedNodes, setLayoutedNodes] = useState<CaseFlowNode[]>([]);
-  const edgesArray = useMemo(() => Array.from(edgesById.values()).map(toFlowEdge), [edgesById]);
+  // Node and edge patches arrive as separate, independent SSE events — an
+  // edge for a brand-new node pair can legitimately land before (or in the
+  // same batch as, in either order) one of its endpoint nodes. ReactFlow
+  // silently drops an edge whose source/target isn't in the current nodes
+  // array (no error, just invisible) — filtering here means a transiently
+  // "orphaned" edge just doesn't render for the one tick until its endpoint
+  // catches up, instead of feeding dagre a phantom node and confusing the
+  // layout in the meantime.
+  const edgesArray = useMemo(() => {
+    const nodeIds = new Set(nodesById.keys());
+    return Array.from(edgesById.values())
+      .filter((e) => nodeIds.has(e.source_node_id) && nodeIds.has(e.target_node_id))
+      .map(toFlowEdge);
+  }, [edgesById, nodesById]);
 
   useEffect(() => {
     const handle = setTimeout(() => {
