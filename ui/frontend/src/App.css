@@ -55,6 +55,13 @@
   min-height: 0;
 }
 
+/* The annotated/overlay tile was removed (App.tsx) — the graph tile (the
+   real value of the demo) takes the freed column instead of leaving an
+   empty grid cell; the video tile stays its original single-column size. */
+.dashboard__grid .tile--graph {
+  grid-column: span 2;
+}
+
 .tile {
   display: flex;
   flex-direction: column;

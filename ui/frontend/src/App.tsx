@@ -1,13 +1,11 @@
 import { useRef, useState } from "react";
 import "./App.css";
 import { VideoPanel } from "./components/tiles/VideoPanel";
-import { AnnotatedVideoPanel } from "./components/tiles/AnnotatedVideoPanel";
 import { StateGraphPanel } from "./components/tiles/StateGraphPanel";
 import { EventInputPanel } from "./components/tiles/EventInputPanel";
 import { RetrievalPanel } from "./components/tiles/RetrievalPanel";
 import { ActionLogPanel } from "./components/tiles/ActionLogPanel";
 import { useCaseStateStream } from "./graph/useCaseStateStream";
-import { useSyncedVideos } from "./video/useSyncedVideos";
 
 const STATE_SERVICE_URL = import.meta.env.VITE_STATE_SERVICE_URL ?? "http://localhost:8080";
 const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://localhost:8090";
@@ -16,7 +14,13 @@ const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://localh
 // one video exists — today there's exactly one demo video, referenced by id.
 const VIDEO_ID = import.meta.env.VITE_DEMO_VIDEO_ID ?? "video_01";
 const RAW_VIDEO_URL = `${STATE_SERVICE_URL}/media/video/${VIDEO_ID}/video_left.mp4`;
-const ANNOTATED_VIDEO_URL = `${STATE_SERVICE_URL}/media/video/${VIDEO_ID}/video_left_annotated.mp4`;
+// The annotated/overlay tile was removed from the UI (caused seek/sync
+// confusion for no benefit — its ground-truth overlay data isn't consumed
+// by any other feature). The generation pipeline (scripts/prepare_demo_videos.py),
+// the GCS-served file itself, and the sync hook (video/useSyncedVideos.ts)
+// are deliberately kept, unused, rather than deleted — see that hook's
+// module docstring for the real bugs it took to get dual-video sync right,
+// in case a future feature needs it again.
 
 async function openCase(videoId: string): Promise<string> {
   const resp = await fetch(`${ORCHESTRATOR_URL}/cases/open`, {
@@ -53,7 +57,6 @@ function App() {
   const triggering = useRef(false);
 
   const { nodes, edges, log, status, error } = useCaseStateStream(caseId);
-  const [rawVideoRef, annotatedVideoRef] = useSyncedVideos();
 
   function handleFirstPlay() {
     if (triggering.current || caseId !== null) return; // only the first play triggers a case
@@ -75,8 +78,7 @@ function App() {
         </span>
       </header>
       <main className="dashboard__grid">
-        <VideoPanel videoUrl={RAW_VIDEO_URL} videoRef={rawVideoRef} onPlay={handleFirstPlay} />
-        <AnnotatedVideoPanel videoUrl={ANNOTATED_VIDEO_URL} videoRef={annotatedVideoRef} />
+        <VideoPanel videoUrl={RAW_VIDEO_URL} onPlay={handleFirstPlay} />
         <StateGraphPanel nodes={nodes} edges={edges} status={status} error={error} />
         <EventInputPanel log={log} onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())} />
         <RetrievalPanel log={log} />
