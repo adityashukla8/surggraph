@@ -13,6 +13,7 @@ first).
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import os
 from pathlib import Path
@@ -36,7 +37,23 @@ def _local_fallback_path(case_id: str) -> Path:
     return RUNTIME_DIR / f"{case_id}_graph_patches.jsonl"
 
 
-def apply_state_patch(
+def _post_patch_sync(state_service_url: str, case_id: str, event: StateDiffEvent) -> StateDiffEvent:
+    resp = requests.post(f"{state_service_url}/state/{case_id}/patch", json=event.model_dump(mode="json"), timeout=10)
+    resp.raise_for_status()
+    # The server's response is authoritative (real seq assigned there) —
+    # returning our own pre-request copy would silently misreport it.
+    return StateDiffEvent.model_validate(resp.json())
+
+
+def _write_local_fallback_sync(case_id: str, event: StateDiffEvent) -> StateDiffEvent:
+    event = event.model_copy(update={"seq": _next_seq(case_id)})
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_local_fallback_path(case_id), "a") as f:
+        f.write(event.model_dump_json() + "\n")
+    return event
+
+
+async def apply_state_patch(
     case_id: str,
     node: GraphNodePatch | None = None,
     edge: GraphEdgePatch | None = None,
@@ -44,6 +61,13 @@ def apply_state_patch(
     source_agent: str = "",
     source_tool: str = "",
 ) -> StateDiffEvent:
+    """`async def` so this can be awaited directly from a shared, long-lived
+    event loop (Orchestrator, the coordinator's real-time on_window_complete
+    callback) without blocking other concurrent work on that loop — the
+    actual network/file I/O is still the synchronous `requests`/`open()`
+    calls underneath (no async HTTP client needed for this call volume), so
+    it's offloaded via asyncio.to_thread rather than blocking the caller's
+    loop directly."""
     if node is None and edge is None:
         raise ValueError("apply_state_patch requires a node or an edge")
 
@@ -68,14 +92,6 @@ def apply_state_patch(
     )
 
     if state_service_url:
-        resp = requests.post(f"{state_service_url}/state/{case_id}/patch", json=event.model_dump(mode="json"), timeout=10)
-        resp.raise_for_status()
-        # The server's response is authoritative (real seq assigned there) —
-        # returning our own pre-request copy would silently misreport it.
-        return StateDiffEvent.model_validate(resp.json())
+        return await asyncio.to_thread(_post_patch_sync, state_service_url, case_id, event)
 
-    event = event.model_copy(update={"seq": _next_seq(case_id)})
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_local_fallback_path(case_id), "a") as f:
-        f.write(event.model_dump_json() + "\n")
-    return event
+    return await asyncio.to_thread(_write_local_fallback_sync, case_id, event)

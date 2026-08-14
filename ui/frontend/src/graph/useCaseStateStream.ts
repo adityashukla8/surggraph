@@ -43,7 +43,7 @@ function toFlowEdge(patch: GraphEdgePatch): CaseFlowEdge {
   };
 }
 
-export type ConnectionStatus = "connecting" | "connected" | "disconnected";
+export type ConnectionStatus = "idle" | "connecting" | "connected" | "disconnected";
 
 interface CaseStateStreamResult {
   nodes: CaseFlowNode[];
@@ -63,16 +63,29 @@ interface CaseStateStreamResult {
  * graph that looks populated but isn't real would misrepresent what the
  * system is actually doing (see the project's fail-closed design principle
  * in initial_11082026.md §9). Callers must render the disconnected/error
- * state explicitly rather than treating empty nodes as "no case yet." */
-export function useCaseStateStream(caseId: string): CaseStateStreamResult {
+ * state explicitly rather than treating empty nodes as "no case yet."
+ *
+ * `caseId` is nullable: no case has been opened until the user presses
+ * play (services/orchestrator_service's POST /cases/open, triggered from
+ * App.tsx's video onPlay handler, not page load) — before that, this
+ * intentionally makes no network connection at all and reports "idle",
+ * distinct from "connecting"/"disconnected" so the UI can render an
+ * honest "nothing has started yet" state rather than implying a stalled
+ * or failed connection. */
+export function useCaseStateStream(caseId: string | null): CaseStateStreamResult {
   const [nodesById, setNodesById] = useState<Map<string, GraphNodePatch>>(new Map());
   const [edgesById, setEdgesById] = useState<Map<string, GraphEdgePatch>>(new Map());
   const [log, setLog] = useState<ReasoningLogEntry[]>([]);
-  const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const lastSeq = useRef<number>(-1);
 
   useEffect(() => {
+    if (caseId === null) {
+      setStatus("idle");
+      return;
+    }
+
     let cancelled = false;
     let es: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;

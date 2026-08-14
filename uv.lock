@@ -590,6 +590,23 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-firestore"
+version = "2.28.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "google-cloud-core" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/8a/cf7722ce8dec68f7ad67d47fb7696301c7b7635f73d291f57e76c0a0a2b2/google_cloud_firestore-2.28.1.tar.gz", hash = "sha256:833fefd9a8b9c68c750da1c0fdd93e4ca1a3ab728081c7d6c57c362e06accf8b", size = 651748, upload-time = "2026-08-06T06:24:23.639Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/95/b774e13e1cf8a1b9f24e453ae7968cfc9566e266a6eb88cd583c92fa5e4b/google_cloud_firestore-2.28.1-py3-none-any.whl", hash = "sha256:972ac92717c8c0c1ead18c28a3d6f739253cdf0940039bc172d5cbbbb399c6fd", size = 431872, upload-time = "2026-08-06T06:23:15.367Z" },
+]
+
+[[package]]
 name = "google-cloud-iam"
 version = "2.24.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1913,6 +1930,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-adk" },
     { name = "google-cloud-aiplatform", extra = ["adk", "agent-engines"] },
+    { name = "google-cloud-firestore" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "imageio-ffmpeg" },
@@ -1941,6 +1959,7 @@ requires-dist = [
     { name = "fastapi" },
     { name = "google-adk" },
     { name = "google-cloud-aiplatform", extras = ["agent-engines", "adk"], specifier = ">=1.112" },
+    { name = "google-cloud-firestore", specifier = ">=2.28" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "imageio-ffmpeg", specifier = ">=0.6.0" },

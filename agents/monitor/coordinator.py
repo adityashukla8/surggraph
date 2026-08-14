@@ -302,7 +302,6 @@ class MonitorCoordinatorAgent(BaseAgent):
         state = ctx.session.state
         video_id = state.get("video_id")
         case_id = state.get("case_id", ctx.session.id)
-        phase = state.get("phase", "unknown")
         start_s = float(state.get("monitor_start_s", 0.0))
         end_s = state.get("monitor_end_s")
         end_s = float(end_s) if end_s is not None else None
@@ -311,7 +310,18 @@ class MonitorCoordinatorAgent(BaseAgent):
             yield Event(author=self.name, content=types.Content(role="model", parts=[types.Part.from_text(text="monitor_coordinator: no video_id in session state, nothing to do")]))
             return
 
-        assessments = await run_monitor_sweep(video_id, start_s=start_s, end_s=end_s)
-        fired = [a for a in assessments if a.is_divergence]
-        summary = f"Monitor swept {len(assessments)} window(s), {len(fired)} divergence(s) fired."
+        # Deferred import: agents/monitor/agent.py imports FROM this module
+        # (MonitorWindowAssessment, build_divergence_event, run_monitor_sweep),
+        # so importing monitor_case at module level here would be circular.
+        # This is the one place the "proper" ADK-invocation path needs it —
+        # calling run_monitor_sweep directly (as an earlier version of this
+        # method did) skips agent.py's on_window_complete callback entirely,
+        # meaning Orchestrator invoking Monitor through the standard ADK flow
+        # would silently emit ZERO real-time graph traceability, unlike the
+        # agent.py::monitor_case path used everywhere else. Unify on the one
+        # entry point that actually writes to the graph.
+        from agents.monitor.agent import monitor_case
+
+        fired = await monitor_case(case_id, video_id, start_s=start_s, end_s=end_s)
+        summary = f"Monitor swept case {case_id}, {len(fired)} divergence(s) fired."
         yield Event(author=self.name, content=types.Content(role="model", parts=[types.Part.from_text(text=summary)]))

@@ -19,6 +19,17 @@ from state.schema import ErrorCategory, SubAgentRole
 # publish a final tuned set — these are project-chosen defaults preserving
 # the required ordering, on a 0-3 scale. Exposed as a parameter everywhere
 # below; re-tune against the real validation sweep (plan §3.5) before demo day.
+#
+# TODO(deferred, tracked in plan §11 todo list — real data now exists, not
+# done yet): the full 261-window offline sweep ran 2026-08-13
+# (data/validation/monitor_accuracy.jsonl) — macro_f1=0.408 vs CARES'
+# published 0.543 on this same dataset. Confusion: tp=119 fp=18 fn=111 tn=13
+# — heavily skewed toward false negatives (111!) relative to false positives
+# (18), meaning DEFAULT_THRESHOLD=1.7 is likely too conservative for this
+# video's real data and/or these alpha weights underweight the signal that
+# actually correlates with true errors here. Re-tuning against this real
+# confusion matrix (not guessing) is the next honest step, deferred for now
+# in favor of the Orchestrator build.
 DEFAULT_ALPHA: dict[SubAgentRole, float] = {
     "temporal": 1.2,
     "spatial": 1.0,

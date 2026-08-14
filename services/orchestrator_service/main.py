@@ -1,0 +1,87 @@
+"""Orchestrator service — the entry point the frontend calls to actually
+start the autonomous pipeline.
+
+The trigger (plan §11, revised after discussion): the user pressing play on
+the video for the first time — not page load, not a GCS/Eventarc pipeline.
+The frontend calls POST /cases/open exactly once, which mints a brand-new,
+fully isolated case_id and kicks off Orchestrator's real work as a
+background task. Every concurrent user gets their own independent pipeline
+run — no get-or-create, no shared state — see agents/orchestrator/agent.py
+and services/state_service/store.py's module docstrings for the full
+multi-tenant design and why (real per-user isolation was an explicit,
+non-negotiable requirement, not a nice-to-have).
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from datetime import datetime, timezone
+
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from google.cloud import firestore
+from pydantic import BaseModel
+
+from agents.orchestrator.agent import open_case
+
+load_dotenv()
+
+app = FastAPI(title="SurgGraph Orchestrator Service")
+
+_cors_origins_env = os.environ.get("ORCHESTRATOR_SERVICE_CORS_ORIGINS")
+_cors_origins = _cors_origins_env.split(",") if _cors_origins_env else []
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    # Same local-dev pattern as services/state_service/main.py — localhost
+    # and 127.0.0.1 are different origins to the browser even though they
+    # resolve to the same host.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+_firestore_client: firestore.AsyncClient | None = None
+
+
+def _get_firestore_client() -> firestore.AsyncClient:
+    global _firestore_client
+    if _firestore_client is None:
+        _firestore_client = firestore.AsyncClient(database=os.environ.get("FIRESTORE_DATABASE", "(default)"))
+    return _firestore_client
+
+
+class OpenCaseRequest(BaseModel):
+    video_id: str
+
+
+class OpenCaseResponse(BaseModel):
+    case_id: str
+
+
+@app.post("/cases/open", response_model=OpenCaseResponse)
+async def post_open_case(payload: OpenCaseRequest, background_tasks: BackgroundTasks) -> OpenCaseResponse:
+    """Mints a fresh case_id, records it in Firestore (case_id/video_id/
+    created_at — the case doc's `seq` field is initialized by the first
+    real graph write inside open_case, not here), and schedules the actual
+    pipeline run via FastAPI's BackgroundTasks — not a bare
+    asyncio.create_task, which risks premature garbage collection if the
+    reference isn't held. Returns immediately; the frontend follows up by
+    connecting to the state service's SSE stream for this case_id."""
+    case_id = f"case-{uuid.uuid4().hex[:12]}"
+
+    client = _get_firestore_client()
+    await client.collection("cases").document(case_id).set(
+        {
+            "case_id": case_id,
+            "video_id": payload.video_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        merge=True,
+    )
+
+    background_tasks.add_task(open_case, case_id, payload.video_id)
+
+    return OpenCaseResponse(case_id=case_id)

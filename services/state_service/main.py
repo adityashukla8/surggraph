@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from services.state_service import gcs_video
-from services.state_service.store import store
+from services.state_service.store import TransactionContentionError, store
 from state.schema import GraphNodePatch, StateDiffEvent, StateSnapshot
 
 load_dotenv()
@@ -72,12 +72,20 @@ async def get_snapshot(case_id: str) -> StateSnapshot:
 async def post_patch(case_id: str, incoming: StateDiffEvent) -> StateDiffEvent:
     if incoming.node is None and incoming.edge is None:
         raise HTTPException(status_code=400, detail="patch requires a node or an edge")
-    return await store.apply_patch(case_id, incoming)
+    try:
+        return await store.apply_patch(case_id, incoming)
+    except TransactionContentionError:
+        # Real but rare (see store.py) — two writers hit the same case doc
+        # in the same instant and the Firestore transaction's 5 retries were
+        # exhausted. Retryable, not a caller error: surface 503, not 500, so
+        # a client (or a future retry wrapper around apply_state_patch)
+        # knows to try again rather than treating this as fatal.
+        raise HTTPException(status_code=503, detail="transaction contention, retry") from None
 
 
 @app.get("/state/{case_id}/stream")
 async def stream(case_id: str, request: Request) -> EventSourceResponse:
-    queue = await store.subscribe(case_id)
+    queue, watch = await store.subscribe(case_id)
 
     async def event_generator():
         try:
@@ -87,7 +95,7 @@ async def stream(case_id: str, request: Request) -> EventSourceResponse:
                 event = await queue.get()
                 yield {"event": "state_diff", "data": event.model_dump_json()}
         finally:
-            await store.unsubscribe(case_id, queue)
+            await store.unsubscribe(case_id, watch)
 
     # ping=15: periodic SSE comment every 15s so intermediate proxies (e.g.
     # Cloud Run) don't time out an idle connection — the plan's own flagged

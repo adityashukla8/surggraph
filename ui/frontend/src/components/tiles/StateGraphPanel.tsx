@@ -21,7 +21,9 @@ export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanel
         <span className={`tile__status tile__status--${status}`}>{status}</span>
       </div>
       <div className="tile__body tile__body--graph">
-        {status === "disconnected" && nodes.length === 0 ? (
+        {status === "idle" ? (
+          <p className="tile__placeholder">No case open yet — press play on the video to start the autonomous workflow.</p>
+        ) : status === "disconnected" && nodes.length === 0 ? (
           <div className="tile__error">
             <p>State service unreachable.</p>
             {error && <p className="tile__error-detail">{error}</p>}
