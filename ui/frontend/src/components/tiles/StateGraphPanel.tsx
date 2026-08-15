@@ -1,5 +1,6 @@
-import { useEffect } from "react";
-import { ReactFlow, Background, Controls, Panel, useReactFlow } from "@xyflow/react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { ReactFlow, Background, Controls, Panel } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { CaseFlowNode } from "../../graph/nodeTypes";
 import { nodeTypes } from "../../graph/nodeTypes";
@@ -15,30 +16,35 @@ interface StateGraphPanelProps {
   error: string | null;
 }
 
-// Rendered as a child of <ReactFlow>, which is what gives useReactFlow() a
-// valid context here without a separate <ReactFlowProvider> wrapper (the
-// documented @xyflow/react pattern — ReactFlow establishes that context for
-// its own children). Re-fits the viewport whenever the node/edge COUNT
-// changes — a cheap, real proxy for "the graph actually grew," debounced
-// past layout.ts's own 500ms re-layout so this fits to the settled
-// positions, not the ones about to be replaced.
-function AutoFitView({ nodeCount, edgeCount }: { nodeCount: number; edgeCount: number }) {
-  const { fitView } = useReactFlow();
-  useEffect(() => {
-    const handle = setTimeout(() => {
-      void fitView({ padding: 0.08, duration: 400 });
-    }, 700);
-    return () => clearTimeout(handle);
-  }, [nodeCount, edgeCount, fitView]);
-  return null;
+interface GraphCanvasProps extends StateGraphPanelProps {
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }
 
-export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanelProps) {
+// Shared between the inline tile and the fullscreen portal (below) — same
+// nodes/edges/status/error props either way, no duplicate data fetching,
+// just a different container. `fitView` (the plain prop, not a recurring
+// effect) fits once on mount only — a real bug fix: an earlier version
+// re-fit on every node/edge count change, which felt like the graph
+// "snapping away" whenever someone was mid-pan/zoom trying to actually
+// inspect it.
+function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullscreen }: GraphCanvasProps) {
   return (
-    <div className="tile tile--graph" data-tile="state-graph">
+    <div className={`tile tile--graph${isFullscreen ? " tile--graph-fullscreen" : ""}`} data-tile="state-graph">
       <div className="tile__header">
         <h3>Autonomous Current + Predicted State Graph</h3>
-        <span className={`tile__status tile__status--${status}`}>{status}</span>
+        <div className="tile__header-actions">
+          <span className={`tile__status tile__status--${status}`}>{status}</span>
+          <button
+            type="button"
+            className="tile__expand-button"
+            onClick={onToggleFullscreen}
+            title={isFullscreen ? "Exit full screen" : "Full screen"}
+            aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+          >
+            {isFullscreen ? "⤡" : "⤢"}
+          </button>
+        </div>
       </div>
       <div className="tile__body tile__body--graph">
         {status === "idle" ? (
@@ -62,10 +68,37 @@ export function StateGraphPanel({ nodes, edges, status, error }: StateGraphPanel
             <Panel position="bottom-right">
               <GraphLegend />
             </Panel>
-            <AutoFitView nodeCount={nodes.length} edgeCount={edges.length} />
           </ReactFlow>
         )}
       </div>
     </div>
   );
+}
+
+export function StateGraphPanel(props: StateGraphPanelProps) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsFullscreen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isFullscreen]);
+
+  if (isFullscreen) {
+    // Portal to document.body rather than a plain position:fixed div in
+    // place — sidesteps any ancestor's overflow:hidden/transform silently
+    // clipping or repositioning the overlay (a real, common CSS gotcha
+    // for fixed-position children).
+    return createPortal(
+      <div className="graph-fullscreen-overlay">
+        <GraphCanvas {...props} isFullscreen onToggleFullscreen={() => setIsFullscreen(false)} />
+      </div>,
+      document.body,
+    );
+  }
+
+  return <GraphCanvas {...props} isFullscreen={false} onToggleFullscreen={() => setIsFullscreen(true)} />;
 }

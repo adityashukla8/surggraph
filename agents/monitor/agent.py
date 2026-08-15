@@ -23,7 +23,7 @@ from agents.monitor.coordinator import MonitorWindowAssessment, build_divergence
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.action_labels import load_action_segments, phase_at_frame
 from tools.state_tools import apply_state_patch, get_state_snapshot
-from tools.video_utils import find_video_fps, format_video_time, format_video_time_range
+from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_time, format_video_time_range
 
 SUB_AGENT_LABELS = {
     "monitor_coordinator": "Monitor Coordinator",
@@ -131,7 +131,7 @@ async def _ensure_phase_node(case_id: str, phase: str, phases_seen: set[str], ti
 
 
 async def monitor_case(
-    case_id: str, video_id: str, start_s: float = 0.0, end_s: float | None = None, window_s: float = 10.0
+    case_id: str, video_id: str, start_s: float = 0.0, end_s: float | None = None, window_s: float = DEFAULT_WINDOW_S
 ) -> list[DivergenceEvent]:
     """Runs the live Monitor detection over [start_s, end_s) of `video_id`
     and returns every DivergenceEvent that actually fired (zero, one, or

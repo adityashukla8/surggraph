@@ -6,14 +6,15 @@ need a real frame rate to convert between frame numbers and seconds.
 
 Two ways to get video content into a Gemini call:
   - `build_video_window_content` (native video, GCS-hosted, via
-    `types.VideoMetadata`) — what agents/monitor/ uses as of the
-    docs/monitor_agent_video_input_benchmark.md migration: ~2.7x fewer
-    prompt tokens and caught a real event our still-frame sampling missed,
-    at the cost of ~2.9x higher per-call latency (real, benchmarked
-    numbers, not estimates — see that doc).
+    `types.VideoMetadata`) — real, benchmarked, still complete and working
+    (docs/monitor_agent_video_input_benchmark.md: ~2.7x fewer prompt
+    tokens and caught a real event still-frame sampling missed, at ~2.9x
+    higher per-call latency), but not currently called by any agent as of
+    docs/latency_optimization.md's second pass — Monitor's deep tier and
+    Scene Graph Builder both moved to still frames for latency. Left in
+    place for a future need, not deleted.
   - `sample_frames`/`frames_to_gemini_parts`/`build_multimodal_content`
-    (locally-extracted JPEG stills) — kept for other uses (a future Scene
-    Graph Builder, UI thumbnails), not deleted by that migration.
+    (locally-extracted JPEG stills) — what every agent actually uses now.
 """
 
 from __future__ import annotations
@@ -32,6 +33,14 @@ load_dotenv()
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 VIDEO_DIR = DATA_ROOT / "video"
+
+# Single source of truth for the real-time sweep window size, shared by
+# Monitor, Scene Graph Builder, and Anticipation (docs/latency_optimization.md)
+# — config-driven rather than hardcoded independently in each agent module,
+# so tuning it can't leave them out of sync with each other. Override via
+# SURGGRAPH_WINDOW_S in .env; 5.0 matches the second latency pass's real,
+# measured choice, not an arbitrary default.
+DEFAULT_WINDOW_S = float(os.environ.get("SURGGRAPH_WINDOW_S", "5.0"))
 
 _VIDEO_MIME_TYPES = {
     ".avi": "video/x-msvideo",

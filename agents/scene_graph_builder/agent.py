@@ -37,13 +37,14 @@ from tools.action_labels import load_action_segments, phase_at_frame
 from tools.adk_runner import run_llm_agent_once
 from tools.state_tools import apply_state_patch
 from tools.video_utils import (
-    build_video_window_content,
+    DEFAULT_WINDOW_S,
+    build_multimodal_content,
     find_video_duration_s,
     find_video_fps,
-    find_video_gcs_uri,
+    find_video_path,
     format_video_time_range,
     generate_nonoverlapping_windows,
-    video_mime_type,
+    sample_frames,
 )
 
 # One static instance, reused across windows (the instruction is role-only,
@@ -58,10 +59,15 @@ AGENT = build_subagent()
 # real video duration, and each bounds only its own call stream.
 _GEMINI_CONCURRENCY = asyncio.Semaphore(6)
 
-# Gemini's own documented default sampling density (not a benchmarked
-# tuning value like Monitor's per-role VIDEO_FPS_PROFILE — scene
-# composition doesn't need Monitor's motion-sensitive density).
-_VIDEO_FPS = 1.0
+# Still frames, not native video (docs/latency_optimization.md's second
+# latency pass — native video's per-call cost is dominated by GCS fetch +
+# server-side decode, not clip length, and was a real contributor to
+# nothing meaningful showing on the graph for ~2 minutes of real video
+# playback). Native resolution (no resize) — unlike Monitor's temporal
+# role, SGB's job is naming small instruments/anatomy correctly, which
+# benefits from full detail more than it needs motion-dense sampling.
+_STILL_FRAME_COUNT = 5
+_STILL_RESIZE = None
 
 
 class SceneGraphWindow(BaseModel):
@@ -80,10 +86,9 @@ def _generate_windows(start_s: float, end_s: float, window_s: float, fps: float)
 
 
 async def run_scene_graph_window(video_id: str, window: SceneGraphWindow, phase_action_id: str | None) -> SceneGraphWindowOutput:
-    gcs_uri = find_video_gcs_uri(video_id)
-    if gcs_uri is None:
-        raise FileNotFoundError(f"no video found in GCS for {video_id!r} — upload it first")
-    mime_type = video_mime_type(gcs_uri)
+    video_path = find_video_path(video_id)
+    if video_path is None:
+        raise FileNotFoundError(f"no source video found for {video_id!r}")
 
     instruction_text = (
         f"Analyze this ~{window.end_s - window.start_s:.0f}s window "
@@ -94,14 +99,14 @@ async def run_scene_graph_window(video_id: str, window: SceneGraphWindow, phase_
     else:
         instruction_text += " No real phase signal is available for this window."
 
-    content = build_video_window_content(
-        gcs_uri,
-        mime_type,
-        start_s=window.start_s,
-        end_s=window.end_s,
-        fps=_VIDEO_FPS,
-        instruction_text=instruction_text,
+    frames = sample_frames(
+        video_path,
+        start_frame=window.start_frame,
+        end_frame=window.end_frame,
+        n_frames=_STILL_FRAME_COUNT,
+        resize_to=_STILL_RESIZE,
     )
+    content = build_multimodal_content(instruction_text=instruction_text, frames=frames)
     async with _GEMINI_CONCURRENCY:
         return await run_llm_agent_once(AGENT, content, SceneGraphWindowOutput, app_name="surggraph_scene_graph_builder")
 
@@ -110,7 +115,7 @@ async def run_scene_graph_sweep(
     video_id: str,
     start_s: float = 0.0,
     end_s: float | None = None,
-    window_s: float = 10.0,
+    window_s: float = DEFAULT_WINDOW_S,
     on_window_complete: Callable[[SceneGraphWindow, SceneGraphWindowOutput], Awaitable[None]] | None = None,
 ) -> list[tuple[SceneGraphWindow, SceneGraphWindowOutput]]:
     fps = find_video_fps(video_id)

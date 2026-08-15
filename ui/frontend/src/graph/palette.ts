@@ -33,7 +33,14 @@ const SERIES_VARS = [
 const OTHER_AGENT_VAR = "--text-muted";
 
 export function agentColorVar(agentName: string): string {
-  const idx = AGENT_COLOR_ORDER.indexOf(agentName);
+  // Monitor's real source_agent values are "monitor_coordinator"/
+  // "monitor_temporal"/"monitor_spatial"/"monitor_procedural" (one shared
+  // family, four real node identities) — none match the bare "monitor"
+  // entry via exact string comparison, so without this normalization all
+  // four silently fell through to the muted "other agent" color instead
+  // of their intended dedicated hue.
+  const normalized = agentName.startsWith("monitor") ? "monitor" : agentName;
+  const idx = AGENT_COLOR_ORDER.indexOf(normalized);
   return idx === -1 ? `var(${OTHER_AGENT_VAR})` : `var(${SERIES_VARS[idx]})`;
 }
 

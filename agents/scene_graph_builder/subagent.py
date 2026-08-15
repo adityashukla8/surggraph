@@ -76,7 +76,15 @@ Assign each entity a short, stable, descriptive entity_id (e.g.
 tracked consistently if it reappears in a later window's output. Only
 report entities and relations you can actually support with a concrete
 visual observation in the frames you were shown — do not guess or
-hallucinate anything not actually visible."""
+hallucinate anything not actually visible.
+
+Your text fields feed live graph state and surgical documentation, not a
+narrative report — activity_description becomes a graph node's actual
+label, so keep it to ONE short, precise phrase (roughly 5-8 words, e.g.
+"suturing bladder neck with needle driver"), never a full sentence or
+paragraph. reasoning should be one short sentence: the concrete evidence
+for what you reported, not an explanation of your process. entity labels
+and relation verbs should be a few words each, not descriptive clauses."""
 
 
 def build_subagent() -> LlmAgent:

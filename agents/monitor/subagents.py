@@ -100,30 +100,40 @@ _TIER_FRAMING: dict[ExpertiseTier, str] = {
 }
 
 
+_CONCISENESS_NOTE = (
+    "Your text fields feed live graph state and surgical documentation, not a narrative "
+    "report — keep every text field to one short, precise sentence: the concrete finding and "
+    "the specific visual evidence for it, nothing more. No throat-clearing, no restating the "
+    "prompt, no hedging beyond what the evidence genuinely warrants."
+)
+
+
 def _screen_instruction(role: SubAgentRole) -> str:
     return (
         f"{_ROLE_FOCUS[role]}\n\n"
-        "You will be shown a sequence of frames from a ~10-second window of a robotic "
+        "You will be shown a sequence of frames from a short window of a robotic "
         "prostatectomy suturing video. For EACH of the six error categories below, decide "
         "whether you suspect that category of error is present in this window, based only on "
         "what you can actually observe in the frames — do not assert an error you can't point "
         "to a concrete visual observation for.\n\n"
         f"{render_knowledge_block()}\n\n"
         "Return one opinion per category you have a view on (omit a category entirely if you "
-        "see nothing relevant to it, rather than guessing)."
+        "see nothing relevant to it, rather than guessing).\n\n"
+        f"{_CONCISENESS_NOTE}"
     )
 
 
 def _deep_instruction(role: SubAgentRole, category: ErrorCategory, tier: ExpertiseTier) -> str:
     return (
         f"{_ROLE_FOCUS[role]}\n\n"
-        "You will be shown a sequence of frames from a ~10-second window of a robotic "
+        "You will be shown a sequence of frames from a short window of a robotic "
         "prostatectomy suturing video. A screening pass flagged this window as a candidate for "
         f"the '{category}' error category. Now give it a focused, deeper look.\n\n"
         f"{_TIER_FRAMING[tier]}\n\n"
         f"{render_knowledge_block([category])}\n\n"
         "Decide whether this specific error is genuinely present, based only on concrete "
-        "observations in the frames."
+        "observations in the frames.\n\n"
+        f"{_CONCISENESS_NOTE}"
     )
 
 
@@ -152,27 +162,24 @@ def build_subagent(
     raise ValueError(f"unknown mode: {mode!r}")
 
 
-# Native-video sampling density per role, applied to the DEEP (accurate,
-# expensive) tier only as of the latency restructuring (docs/latency_optimization.md)
-# — was applied to both tiers before that. Temporal wants dense sampling to
-# see motion/hesitation trend (fps=5.0 matches the benchmarked accuracy
-# sweet spot for motion-sensitive tasks); Spatial and Procedural want fewer
-# frame-equivalents over the same 10s window, mirroring their original
-# "fewer frames" intent (media_resolution tuning for Spatial's positional-
-# precision need is an open follow-up, not yet benchmarked).
-VIDEO_FPS_PROFILE: dict[SubAgentRole, float] = {
-    "temporal": 5.0,
-    "spatial": 0.4,
-    "procedural": 0.6,
-}
-
-# Still-frame sampling for the SCREEN (cheap, fast) tier — real, previously-
-# designed values from before the native-video migration, reused now that
-# the screen tier is back to still frames for latency (docs/latency_optimization.md,
-# confirmed ~2.9x faster than native video for the same window). resize_to
-# of None means native resolution.
-SCREEN_STILL_FRAME_PROFILE: dict[SubAgentRole, dict] = {
-    "temporal": {"n_frames": 10, "resize_to": (960, 540)},
+# Still-frame sampling, now shared by BOTH the screen and deep tiers
+# (2026-08-14, second latency pass — docs/latency_optimization.md). Native
+# video for the deep tier was found to still dominate real end-to-end
+# latency once the deep pass became unconditional (every window, not just
+# escalated ones) — its per-call cost is driven by GCS fetch + server-side
+# decode, not clip length, so shrinking the window alone doesn't help it.
+# Switched to stills for a confirmed ~2.9x per-call speedup
+# (docs/monitor_agent_video_input_benchmark.md), accepting the real,
+# disclosed accuracy tradeoff (native video previously caught a real event
+# still-frame sampling missed) per the user's explicit latency-over-accuracy
+# priority. Frame counts roughly halved from the original 10s-window values
+# to keep sampling DENSITY constant now that window_s is 5.0, not doubled
+# sampling of a now-shorter window. resize_to of None means native
+# resolution. The screen/deep distinction remains real even with identical
+# input now: screen reasons broadly across all 6 categories in one call;
+# deep re-examines the same frames with a single-category, tier-framed lens.
+STILL_FRAME_PROFILE: dict[SubAgentRole, dict] = {
+    "temporal": {"n_frames": 5, "resize_to": (960, 540)},
     "spatial": {"n_frames": 4, "resize_to": None},
-    "procedural": {"n_frames": 6, "resize_to": None},
+    "procedural": {"n_frames": 3, "resize_to": None},
 }

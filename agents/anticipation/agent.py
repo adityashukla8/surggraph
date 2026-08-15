@@ -51,6 +51,7 @@ from tools.adk_runner import run_llm_agent_once
 from tools.phase_transition_priors import summarize_transition_confidence
 from tools.state_tools import apply_state_patch, get_state_snapshot
 from tools.video_utils import (
+    DEFAULT_WINDOW_S,
     VideoWindow,
     build_multimodal_content,
     find_video_fps,
@@ -67,7 +68,7 @@ AGENT = build_subagent()
 
 _GEMINI_CONCURRENCY = asyncio.Semaphore(6)
 
-_WINDOW_S = 10.0  # matches Scene Graph Builder's own real-time cadence
+_WINDOW_S = DEFAULT_WINDOW_S  # shared, config-driven — matches Monitor's/Scene Graph Builder's own real-time cadence
 _STILL_FRAME_COUNT = 4
 _STILL_RESIZE = (960, 540)
 

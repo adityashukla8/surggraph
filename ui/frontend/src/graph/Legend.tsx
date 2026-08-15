@@ -1,11 +1,17 @@
-import { NODE_TYPE_ICON, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR, EVENT_NODE_ACCENT } from "./palette";
+import { NODE_TYPE_ICON, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR, EVENT_NODE_ACCENT, agentColorVar } from "./palette";
 
 // Static reference reflecting the real encoding in nodeTypes.tsx/edgeTypes.tsx/
 // palette.ts — kept as literal entries (not derived from those maps) since
 // the maps themselves don't carry human-readable descriptions, only the
-// raw colors/icons the node/edge components consume.
+// raw colors/icons the node/edge components consume. Verified against the
+// real per-kind stroke widths/colors in edgeTypes.tsx::edgeStyle, not
+// guessed — e.g. action is real width 1.5 (thin), observed is real width 3
+// (thick); getting that backwards here would make the legend itself wrong.
 const NODE_ROWS: { icon: string; color: string; label: string }[] = [
-  { icon: NODE_TYPE_ICON.agent, color: "var(--text-secondary)", label: "Agent" },
+  // Real agent-node color varies per agent (agentColorVar(source_agent)) —
+  // shown here with Anticipation's real color as one concrete example
+  // rather than a color no real node actually uses.
+  { icon: NODE_TYPE_ICON.agent, color: agentColorVar("anticipation"), label: "Agent (color = which agent)" },
   { icon: NODE_TYPE_ICON.phase, color: "var(--baseline)", label: "Phase / activity" },
   { icon: NODE_TYPE_ICON.entity, color: "var(--baseline)", label: "Entity (instrument / anatomy)" },
   { icon: NODE_TYPE_ICON.event, color: EVENT_NODE_ACCENT, label: "Event (divergence)" },
@@ -13,10 +19,14 @@ const NODE_ROWS: { icon: string; color: string; label: string }[] = [
 ];
 
 const EDGE_ROWS: { swatch: React.CSSProperties; label: string }[] = [
-  { swatch: { borderTop: `3px solid ${EDGE_KIND_COLOR.action}` }, label: "Action / dispatch" },
+  { swatch: { borderTop: `2px solid ${EDGE_KIND_COLOR.action}` }, label: "Action / dispatch" },
   { swatch: { borderTop: `3px solid ${EDGE_KIND_COLOR.observed}` }, label: "Observed (confirmed real)" },
-  { swatch: { borderTop: "2px dashed var(--text-secondary)" }, label: "Predicted — pending" },
-  { swatch: { borderTop: "2px dashed var(--text-muted)", opacity: 0.5 }, label: "Predicted — refuted" },
+  // Real predicted-pending edges are colored by the predicting agent
+  // (edgeTypes.tsx: agentColorVar(sourceAgent)), not a fixed hue —
+  // Anticipation is currently the only real source of these, so its color
+  // is the accurate representative swatch, not an arbitrary choice.
+  { swatch: { borderTop: `2px dashed ${agentColorVar("anticipation")}` }, label: "Predicted — pending (color = predicting agent)" },
+  { swatch: { borderTop: "1.5px dashed var(--text-muted)", opacity: 0.35 }, label: "Predicted — refuted" },
 ];
 
 const STATUS_ROWS: { color: string; label: string }[] = [

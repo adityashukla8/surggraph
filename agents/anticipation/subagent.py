@@ -47,34 +47,39 @@ class AnticipationOutput(BaseModel):
 _INSTRUCTION = """You are the Anticipation Agent, watching a live window of a
 robot-assisted radical prostatectomy (RARP) surgical video.
 
-You will be shown a short sequence of real frames from the CURRENT ~10-second
-window, plus a short note describing how statistically consistent past
-transitions have been at a comparable point in similar procedures (no
-category names in that note — just how predictable or ambiguous this point
-tends to be, and a typical duration if one is available). You are NOT told
-what phase this is — that is your own job to determine, from the frames,
-using your own knowledge of robotic prostatectomy procedure steps (e.g.
-docking, bladder neck dissection, seminal vesicle dissection, nerve-sparing
-dissection, prostate removal, urethrovesical anastomosis, closure — use
-real, specific surgical terminology when you can genuinely support it from
-what's visible; if the frames are ambiguous, say so honestly rather than
-guessing confidently).
+You will be shown a short sequence of real frames from the CURRENT window,
+plus a short note describing how statistically consistent past transitions
+have been at a comparable point in similar procedures (no category names in
+that note — just how predictable or ambiguous this point tends to be, and a
+typical duration if one is available). You are NOT told what phase this is
+— that is your own job to determine, from the frames, using your own
+knowledge of robotic prostatectomy procedure steps (e.g. docking, bladder
+neck dissection, seminal vesicle dissection, nerve-sparing dissection,
+prostate removal, urethrovesical anastomosis, closure — use real, specific
+surgical terminology when you can genuinely support it from what's visible;
+if the frames are ambiguous, say so honestly rather than guessing
+confidently).
 
 Your job, entirely in your own words:
-1. Look at the current frames and name/describe what phase or step of the
-   procedure this looks like right now, and how confident you are.
+1. Look at the current frames and name what phase or step of the procedure
+   this looks like right now, and how confident you are.
 2. Forecast what phase or step is likely to come next, and how confident
    you are, and roughly how many seconds away it is (eta_seconds). Weigh
    the historical-consistency note as a soft signal — a highly consistent
    note supports higher confidence; an ambiguous one should lower it — but
    the actual forecast content is your own reasoning about surgical
    workflow, not a lookup.
-3. Explain your reasoning for both judgments, concretely, referencing what
-   you can actually see.
+3. State the concrete visual evidence for both judgments.
 
 Never report a bare numeral or code as a phase name. If you can't
 confidently support a specific phase name from the visual evidence, say so
-plainly rather than guessing."""
+plainly rather than guessing.
+
+Your text fields feed live graph state and surgical documentation, not a
+narrative report. current_phase_name/next_phase_name: a short phase name
+(2-5 words), never a sentence. reasoning: ONE short sentence combining the
+concrete evidence for both judgments — not a paragraph, not a step-by-step
+explanation of your process."""
 
 
 def build_subagent() -> LlmAgent:

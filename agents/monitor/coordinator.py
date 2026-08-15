@@ -4,23 +4,39 @@ sliding window and combines their outputs via deterministic weighted
 aggregation (agents/monitor/aggregation.py) — never a 4th LLM call for the
 arithmetic.
 
-Latency restructuring (2026-08-14, full rationale in docs/latency_optimization.md):
-real per-window latency (median 163s, offline sweep) was dominated by two
-things — native video's real per-call cost, and the screen→escalate→deep
-structure being *sequential*. Fixed by:
+Latency restructuring, first pass (2026-08-14, full rationale in
+docs/latency_optimization.md): real per-window latency (median 163s,
+offline sweep) was dominated by two things — native video's real per-call
+cost, and the screen→escalate→deep structure being *sequential*. Fixed by:
   - Screen tier: switched from native video to still frames (~2.9x cheaper
     per the benchmark) — it's the tier that always runs, so this is where
     cost reduction actually matters.
-  - Deep tier: now UNCONDITIONAL across all 6 error categories (not gated
+  - Deep tier: made UNCONDITIONAL across all 6 error categories (not gated
     on screen's escalation choice) at a FIXED "attending" tier (dropping
     Ψ-based tier routing — the plan's own cut-order already flagged this as
     ~3% accuracy impact, now cut for latency instead of schedule reasons).
-    Still native video — that's where its real accuracy value is.
+    Kept native video at first — that's where its real accuracy value is.
   - Screen and deep run CONCURRENTLY (asyncio.gather), not sequentially —
     a window's wall time is max(screen, deep) instead of screen + deep.
-  - Net: every window now gets a real verdict on all 6 categories (more
+
+Latency restructuring, second pass (same day, after live use showed
+nothing meaningful on the graph for ~2 minutes of real video playback):
+making the deep tier unconditional meant EVERY window now pays native
+video's real per-call cost (dominated by GCS fetch + server-side decode,
+not clip length — confirmed via the benchmark, so a shorter window alone
+doesn't fix it). Deep tier switched to still frames too — same real frame
+sample as the screen pass now (STILL_FRAME_PROFILE), with the two tiers
+differing in REASONING framing (broad scan vs. focused re-examination),
+not input modality. Window size also dropped 10s -> 5s, whose benefit is
+unlocked precisely because both tiers are stills now (frame count scales
+with window length; it didn't meaningfully move native video's fetch/decode-
+dominated cost). Real, disclosed accuracy tradeoff: native video previously
+caught a real event still-frame sampling missed — accepted per the user's
+explicit latency-over-accuracy priority.
+  - Net: every window still gets a real verdict on all 6 categories (more
     thorough than before, not less), at real added cost, for a real
-    latency win on the dimension that mattered (wall clock).
+    latency win on the dimension that mattered (wall clock, and especially
+    time-to-first-meaningful-result).
 
 `MonitorCoordinatorAgent` is a `BaseAgent` subclass, not an `LlmAgent` and
 not `ParallelAgent`. Verified directly against the installed ADK 2.6.3 this
@@ -50,6 +66,7 @@ Monitor through the standard ADK flow during the live demo.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable
 
 from google.adk.agents import BaseAgent
@@ -60,24 +77,11 @@ from pydantic import BaseModel
 
 from agents.monitor.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate
 from agents.monitor.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi
-from agents.monitor.subagents import (
-    SCREEN_STILL_FRAME_PROFILE,
-    VIDEO_FPS_PROFILE,
-    DeepOutput,
-    ScreenOutput,
-    build_subagent,
-)
+from agents.monitor.subagents import STILL_FRAME_PROFILE, DeepOutput, ScreenOutput, build_subagent
 from state.schema import DivergenceEvent, ErrorCategory, ExpertiseTier, MonitorSubAgentAssessment, SubAgentRole
 from tools.adk_runner import run_llm_agent_once
 from tools.sedmamba_labels import ErrorAnnotations, MonitorWindow, generate_windows, load_error_annotations
-from tools.video_utils import (
-    build_multimodal_content,
-    build_video_window_content,
-    find_video_gcs_uri,
-    find_video_path,
-    sample_frames,
-    video_mime_type,
-)
+from tools.video_utils import DEFAULT_WINDOW_S, build_multimodal_content, find_video_path, sample_frames
 
 _ROLES: list[SubAgentRole] = ["temporal", "spatial", "procedural"]
 _CATEGORIES: list[ErrorCategory] = list(ERROR_KNOWLEDGE_LIBRARY.keys())
@@ -157,22 +161,23 @@ async def _run_agent_once(agent, content: types.Content, output_model: type[Base
         return await run_llm_agent_once(agent, content, output_model, app_name="surggraph_monitor")
 
 
-async def _run_screen_pass_stills(video_id: str, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
+def _sample_role_frames(video_path: Path, window: MonitorWindow, role: SubAgentRole) -> list:
+    profile = STILL_FRAME_PROFILE[role]
+    return sample_frames(
+        video_path,
+        start_frame=window.start_frame,
+        end_frame=window.end_frame,
+        n_frames=profile["n_frames"],
+        resize_to=profile["resize_to"],
+    )
+
+
+async def _run_screen_pass_stills(video_path: Path, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
     """Cheap, fast tier — still frames, not native video (docs/latency_optimization.md:
     real ~2.9x per-call latency win, confirmed via docs/monitor_agent_video_input_benchmark.md)."""
-    video_path = find_video_path(video_id)
-    if video_path is None:
-        raise FileNotFoundError(f"no local source video found for {video_id!r}")
 
     async def one(role: SubAgentRole) -> tuple[SubAgentRole, ScreenOutput]:
-        profile = SCREEN_STILL_FRAME_PROFILE[role]
-        frames = sample_frames(
-            video_path,
-            start_frame=window.start_frame,
-            end_frame=window.end_frame,
-            n_frames=profile["n_frames"],
-            resize_to=profile["resize_to"],
-        )
+        frames = _sample_role_frames(video_path, window, role)
         content = build_multimodal_content(
             instruction_text=f"Analyze this ~{window.end_s - window.start_s:.0f}s window (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
             frames=frames,
@@ -184,22 +189,25 @@ async def _run_screen_pass_stills(video_id: str, window: MonitorWindow) -> dict[
     return dict(results)
 
 
-async def _run_deep_pass_all_categories(
-    gcs_uri: str, mime_type: str, window: MonitorWindow
-) -> dict[ErrorCategory, dict[SubAgentRole, DeepOutput]]:
-    """Expensive, accurate tier — native video, now UNCONDITIONAL across all
-    6 categories (not gated on screen's escalation choice) at a fixed
-    'attending' tier. 18 real parallel calls per window (3 roles x 6
-    categories) — real added cost, accepted for latency (docs/latency_optimization.md)."""
+async def _run_deep_pass_all_categories(video_path: Path, window: MonitorWindow) -> dict[ErrorCategory, dict[SubAgentRole, DeepOutput]]:
+    """Deep tier, UNCONDITIONAL across all 6 categories (not gated on
+    screen's escalation choice) at a fixed 'attending' tier — 18 real
+    parallel calls per window (3 roles x 6 categories), real added cost,
+    accepted for latency. Now still frames too, not native video (second
+    latency pass, docs/latency_optimization.md): once this tier became
+    unconditional, its real per-window cost (dominated by native video's
+    GCS-fetch + server-side-decode overhead, not proportional to clip
+    length) was the actual long pole behind "nothing meaningful on the
+    graph for ~2 minutes." Same real frame sample as the screen pass for
+    a given window (STILL_FRAME_PROFILE) — the two tiers now differ in
+    REASONING framing (broad 6-category scan vs. focused single-category,
+    tier-voiced re-examination), not input modality."""
 
     async def one(role: SubAgentRole, category: ErrorCategory) -> tuple[ErrorCategory, SubAgentRole, DeepOutput]:
-        content = build_video_window_content(
-            gcs_uri,
-            mime_type,
-            start_s=window.start_s,
-            end_s=window.end_s,
-            fps=VIDEO_FPS_PROFILE[role],
+        frames = _sample_role_frames(video_path, window, role)
+        content = build_multimodal_content(
             instruction_text=f"Deep review, category={category}, tier={_FIXED_DEEP_TIER} (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
+            frames=frames,
         )
         result = await _run_agent_once(_DEEP_AGENTS[(role, category)], content, DeepOutput)
         return category, role, result
@@ -217,20 +225,19 @@ async def run_monitor_window(
     alpha_weights: dict[SubAgentRole, float] = DEFAULT_ALPHA,
     threshold: float = DEFAULT_THRESHOLD,
 ) -> MonitorWindowAssessment:
-    gcs_uri = find_video_gcs_uri(video_id)
-    if gcs_uri is None:
-        raise FileNotFoundError(f"no video found in GCS for {video_id} — upload it first (see docs/monitor_agent_video_input_benchmark.md)")
-    mime_type = video_mime_type(gcs_uri)
+    video_path = find_video_path(video_id)
+    if video_path is None:
+        raise FileNotFoundError(f"no local source video found for {video_id!r}")
 
-    # Screen (still frames) and deep (native video, all categories) run
-    # CONCURRENTLY, not sequentially — a window's wall time is max(screen,
-    # deep) instead of screen + deep (docs/latency_optimization.md). Screen's
-    # own opinions aren't consumed further here (deep is unconditional now);
+    # Screen and deep (both stills now, docs/latency_optimization.md's
+    # second pass) run CONCURRENTLY, not sequentially — a window's wall
+    # time is max(screen, deep) instead of screen + deep. Screen's own
+    # opinions aren't consumed further here (deep is unconditional now);
     # it still runs because it's the cheap tier that populates the graph
     # fast, and agents/monitor/agent.py's real-time traceability uses it.
     _screen_results, deep_by_category = await asyncio.gather(
-        _run_screen_pass_stills(video_id, window),
-        _run_deep_pass_all_categories(gcs_uri, mime_type, window),
+        _run_screen_pass_stills(video_path, window),
+        _run_deep_pass_all_categories(video_path, window),
     )
 
     category_results: dict[str, CategoryResult] = {}
@@ -280,7 +287,7 @@ async def run_monitor_sweep(
     start_s: float = 0.0,
     end_s: float | None = None,
     stride_s: float = 1.0,
-    window_s: float = 10.0,
+    window_s: float = DEFAULT_WINDOW_S,
     max_concurrent_windows: int = 6,
     annotations: ErrorAnnotations | None = None,
     on_window_complete: Callable[[MonitorWindowAssessment], Awaitable[None]] | None = None,
