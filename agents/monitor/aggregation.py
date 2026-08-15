@@ -20,16 +20,18 @@ from state.schema import ErrorCategory, SubAgentRole
 # the required ordering, on a 0-3 scale. Exposed as a parameter everywhere
 # below; re-tune against the real validation sweep (plan §3.5) before demo day.
 #
-# TODO(deferred, tracked in plan §11 todo list — real data now exists, not
-# done yet): the full 261-window offline sweep ran 2026-08-13
-# (data/validation/monitor_accuracy.jsonl) — macro_f1=0.408 vs CARES'
-# published 0.543 on this same dataset. Confusion: tp=119 fp=18 fn=111 tn=13
-# — heavily skewed toward false negatives (111!) relative to false positives
-# (18), meaning DEFAULT_THRESHOLD=1.7 is likely too conservative for this
-# video's real data and/or these alpha weights underweight the signal that
-# actually correlates with true errors here. Re-tuning against this real
-# confusion matrix (not guessing) is the next honest step, deferred for now
-# in favor of the Orchestrator build.
+# TODO(still deferred — real data exists twice now, still not re-tuned):
+# original 261-window sweep (2026-08-13, pre frame-driven restructuring,
+# archived at data/validation/monitor_accuracy_2026-08-13_pre_framedriven.jsonl)
+# — macro_f1=0.408, confusion tp=119 fp=18 fn=111 tn=13. Rerun 2026-08-15
+# after both tiers moved to still frames (53 windows, 5s stride, coarser
+# sample — not a strict re-test of the same 262-window set, so treat the
+# comparison as directional, not exact) — macro_f1=0.515 (data/validation/
+# monitor_accuracy.jsonl), confusion tp=29 fp=2 fn=18 tn=4. Same real
+# pattern both times: heavily skewed toward false negatives relative to
+# false positives, meaning DEFAULT_THRESHOLD=1.7 is still likely too
+# conservative for this video's real data. Re-tuning against the real
+# confusion matrix (not guessing) remains the honest next step.
 DEFAULT_ALPHA: dict[SubAgentRole, float] = {
     "temporal": 1.2,
     "spatial": 1.0,
