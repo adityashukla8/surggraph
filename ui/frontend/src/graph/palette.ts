@@ -53,7 +53,20 @@ const NODE_KIND_COLOR: Record<NodeType, string> = {
   documentation: "var(--node-brown)",
 };
 
-export function nodeKindColorVar(nodeType: NodeType): string {
+// Severity is what actually gates whether an error is acted on, so it is what
+// the outline should encode — an error that reads identical to another but
+// behaves differently is the single most confusing thing this graph can do.
+const SEVERITY_COLOR: Record<string, string> = {
+  low: "var(--status-warning)", // amber — noted, below the reasoning threshold
+  medium: "var(--series-2)", // orange
+  high: "var(--series-8)", // red
+};
+
+export function nodeKindColorVar(nodeType: NodeType, attrs?: Record<string, unknown>): string {
+  if (nodeType === "error") {
+    const band = attrs?.severity_band;
+    if (typeof band === "string" && band in SEVERITY_COLOR) return SEVERITY_COLOR[band];
+  }
   return NODE_KIND_COLOR[nodeType] ?? "var(--baseline)";
 }
 
@@ -110,7 +123,15 @@ export function agentColorVar(agentName: string): string {
 // two §4.2 marks dashed — prediction and proposal — because both describe
 // something that has not happened yet.
 
-export const DASHED_EDGE_KINDS: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["prediction", "proposal"]);
+// Dashed means "has not happened". Prediction and proposal are dashed in §4.2
+// for exactly that reason, and causal_reasoning belongs with them: a
+// complication is a reasoned POSSIBILITY, not an observed event. Drawing it
+// solid like a detection would assert that it occurred.
+export const DASHED_EDGE_KINDS: ReadonlySet<EdgeKind> = new Set<EdgeKind>([
+  "prediction",
+  "proposal",
+  "causal_reasoning",
+]);
 
 export const EDGE_KIND_COLOR: Record<EdgeKind, string> = {
   hierarchy: "var(--baseline)", // the static case skeleton — deliberately quiet

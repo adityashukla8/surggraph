@@ -110,6 +110,30 @@ def _format_slice(slice_context: dict, retrieved: list[dict] | None = None) -> s
     return "\n".join(lines)
 
 
+async def _record_outcome(case_id: str, error_node, status: str, detail: str) -> None:
+    """Writes back WHY an error did or did not produce complications.
+
+    Without this the graph silently omits. Two errors look identical on screen,
+    one with complications hanging off it and one with none, and there is no
+    way to tell whether it was reasoned and found benign, skipped as a repeat
+    of a category already covered in this phase, or below the severity
+    threshold. Recording the outcome is what makes the absence readable instead
+    of looking like a dropped step.
+    """
+    await apply_state_patches(
+        case_id,
+        [
+            (
+                error_node.model_copy(
+                    update={"attrs": {**error_node.attrs, "complication_status": status, "complication_status_detail": detail}}
+                ),
+                None,
+                f"Complication reasoning: {status}",
+            )
+        ],
+    )
+
+
 async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
     """Runs the full chain for one error node. Returns the complication node ids
     written (empty when the error genuinely warrants none)."""
@@ -123,6 +147,7 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
     band = attrs.get("severity_band", "low")
     if not meets_complication_trigger(band):
         logger.info("complication[%s]: %s is severity=%s, below trigger", case_id, error_node_id, band)
+        await _record_outcome(case_id, error_node, "below_severity_threshold", f"severity {band} is below the reasoning threshold")
         return []
 
     phase_label = (index.snapshot_slot(node_ids.SNAPSHOT_CURRENT_PHASE) or {}).get("label", "")
@@ -135,6 +160,10 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
     )
     if cache_key in _seen:
         logger.info("complication[%s]: already reasoned for %s in this phase", case_id, attrs.get("error_category"))
+        await _record_outcome(
+            case_id, error_node, "already_reasoned",
+            f"{attrs.get('error_category')} was already reasoned about during this phase",
+        )
         return []
     _seen.add(cache_key)
 
@@ -148,7 +177,7 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
 
     # Step 2 — a real retrieval against real literature.
     hits, literature_node_ids, evidence_available = await retrieve(
-        case_id, query_out.query, fallbacks=[query_out.broader_query]
+        case_id, query_out.query, fallbacks=[query_out.broader_query], parent_node_id=error_node_id
     )
 
     # Step 3 — reason over what actually came back.
@@ -161,6 +190,7 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
 
     if not assessment.candidates:
         logger.info("complication[%s]: no complications warranted for %s", case_id, error_node_id)
+        await _record_outcome(case_id, error_node, "none_warranted", assessment.reasoning)
         return []
 
     patches: list[tuple] = []
@@ -220,6 +250,21 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
                 evidence_edges([literature_node_ids[idx]], node_id, f"Supports: {candidate.name}")
             )
 
+    patches.append(
+        (
+            error_node.model_copy(
+                update={
+                    "attrs": {
+                        **error_node.attrs,
+                        "complication_status": "reasoned",
+                        "complication_status_detail": f"{len(written)} complication(s) identified",
+                    }
+                }
+            ),
+            None,
+            "Complication reasoning: reasoned",
+        )
+    )
     await apply_state_patches(case_id, patches)
     logger.info(
         "complication[%s]: %d candidate(s) from %s: %s",

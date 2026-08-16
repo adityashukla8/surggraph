@@ -26,7 +26,7 @@ const NODE_GROUPS: { heading: string; rows: NodeRow[] }[] = [
   {
     heading: "Reasoning",
     rows: [
-      { kind: "error", label: "Technique error (OCHRA-grounded)" },
+      { kind: "error", label: "Technique error — outline = severity" },
       { kind: "complication", label: "Complication candidate" },
       { kind: "literature_evidence", label: "Literature evidence" },
       { kind: "corrective_trajectory", label: "Corrective proposal — what SHOULD happen" },
@@ -60,7 +60,7 @@ const EDGE_ROWS: EdgeRow[] = [
   { kind: "involved", label: "Event involves entity" },
   { kind: "succession", label: "Followed in time" },
   { kind: "detection", label: "Detected from perception" },
-  { kind: "causal_reasoning", label: "Error → complication" },
+  { kind: "causal_reasoning", label: "Error → possible complication" },
   { kind: "evidence", label: "Grounded in literature" },
   { kind: "prediction", label: "Predicted (color = predicting agent)" },
   { kind: "proposal", label: "Proposed corrective action" },
@@ -75,7 +75,7 @@ const EDGE_ROWS: EdgeRow[] = [
 // render shows up here too rather than leaving the legend quietly wrong.
 const STRUCTURAL: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["hierarchy", "involved", "succession"]);
 const EMPHASIZED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["confirmation", "verification"]);
-const DASHED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["prediction", "proposal"]);
+const DASHED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["prediction", "proposal", "causal_reasoning"]);
 
 function edgeSwatch(kind: EdgeKind): React.CSSProperties {
   const width = STRUCTURAL.has(kind) ? 1 : EMPHASIZED.has(kind) ? 3 : 1.5;

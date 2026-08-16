@@ -92,6 +92,8 @@ export interface CaseGraphNodeData extends Record<string, unknown> {
   confidence?: number;
   predicted?: boolean;
   confirmationSignal?: ConfirmationSignal;
+  /** Error severity band — what actually gates downstream reasoning. */
+  severityBand?: string;
   /** Real rendered width in px, measured and assigned by layoutGraph so the
    *  node renders at exactly the size dagre reserved for it (plan_v2 §4.1). */
   width?: number;

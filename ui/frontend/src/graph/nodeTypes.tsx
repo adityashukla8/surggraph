@@ -13,7 +13,7 @@ export type CaseFlowNode = Node<CaseGraphNodeData, "caseNode">;
 function CaseNode({ data }: NodeProps<CaseFlowNode>) {
   // Two independent signals on two channels (see palette.ts): the outline says
   // WHAT KIND of thing this is, the icon says WHICH AGENT produced it.
-  const kindColor = nodeKindColorVar(data.nodeType);
+  const kindColor = nodeKindColorVar(data.nodeType, data.raw.attrs);
   const outlineStyle = nodeKindOutlineStyle(data.nodeType);
   const agentColor = agentColorVar(data.sourceAgent);
   const isPredicted = Boolean(data.predicted);
@@ -36,8 +36,16 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
             dagre so growth never causes overlap. */}
         <span className="case-node__label">{data.label}</span>
       </div>
-      {(data.confidence !== undefined || statusColor) && (
+      {(data.confidence !== undefined || statusColor || data.severityBand) && (
         <div className="case-node__meta">
+          {/* Severity, not confidence, is what decides whether this error gets
+              reasoned about — so it has to be on the node. Two errors at 95%
+              confidence can behave completely differently. */}
+          {data.severityBand && (
+            <span className="case-node__severity" style={{ color: kindColor }}>
+              {data.severityBand}
+            </span>
+          )}
           {data.confidence !== undefined && (
             <span className="case-node__confidence">{Math.round(data.confidence * 100)}%</span>
           )}

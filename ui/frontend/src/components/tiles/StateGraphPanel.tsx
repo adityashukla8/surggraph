@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ReactFlow, Background, Controls, Panel } from "@xyflow/react";
+import { ReactFlow, Background, Controls, Panel, useReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { CaseFlowNode } from "../../graph/nodeTypes";
 import { nodeTypes } from "../../graph/nodeTypes";
@@ -28,6 +28,32 @@ interface GraphCanvasProps extends StateGraphPanelProps {
 // re-fit on every node/edge count change, which felt like the graph
 // "snapping away" whenever someone was mid-pan/zoom trying to actually
 // inspect it.
+/** Fits the view exactly ONCE, when the first nodes arrive.
+ *
+ * ReactFlow's `fitView` prop runs on mount, and on mount this graph is still
+ * empty — so it fits nothing, and every node that lands afterwards is placed
+ * outside the viewport. The trigger node sits at the far left as the layout
+ * root, which made it look like it had never been written at all.
+ *
+ * Deliberately NOT a re-fit on every change: that was removed on purpose
+ * because it yanked the viewport while you were inspecting the graph. This
+ * fires once and then never again, so panning and zooming stay yours.
+ */
+function InitialFit({ nodeCount }: { nodeCount: number }) {
+  const { fitView } = useReactFlow();
+  const done = useRef(false);
+
+  useEffect(() => {
+    if (done.current || nodeCount === 0) return;
+    done.current = true;
+    // A frame later, so the layout pass has positioned the new nodes.
+    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }));
+  }, [nodeCount, fitView]);
+
+  return null;
+}
+
+
 function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullscreen }: GraphCanvasProps) {
   return (
     <div className={`tile tile--graph${isFullscreen ? " tile--graph-fullscreen" : ""}`} data-tile="state-graph">
@@ -64,6 +90,7 @@ function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullsc
             proOptions={{ hideAttribution: true }}
           >
             <Background />
+            <InitialFit nodeCount={nodes.length} />
             <Controls />
             <Panel position="bottom-right">
               <GraphLegend />

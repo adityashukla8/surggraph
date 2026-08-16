@@ -77,7 +77,11 @@ def query_hash(query: str) -> str:
 
 
 async def retrieve(
-    case_id: str, query: str, top_n: int = DEFAULT_TOP_N, fallbacks: list[str] | None = None
+    case_id: str,
+    query: str,
+    top_n: int = DEFAULT_TOP_N,
+    fallbacks: list[str] | None = None,
+    parent_node_id: str | None = None,
 ) -> tuple[list[dict], list[str], bool]:
     """Runs a retrieval and writes its results as literature_evidence nodes.
 
@@ -94,7 +98,7 @@ async def retrieve(
     for candidate in [query, *(fallbacks or [])]:
         if not candidate or not candidate.strip():
             continue
-        hits, ids, ok = await _retrieve_one(case_id, candidate, top_n)
+        hits, ids, ok = await _retrieve_one(case_id, candidate, top_n, parent_node_id)
         if ok:
             if candidate != query:
                 logger.info("literature[%s]: primary query found nothing; %r did", case_id, candidate[:60])
@@ -102,7 +106,9 @@ async def retrieve(
     return [], [], False
 
 
-async def _retrieve_one(case_id: str, query: str, top_n: int) -> tuple[list[dict], list[str], bool]:
+async def _retrieve_one(
+    case_id: str, query: str, top_n: int, parent_node_id: str | None
+) -> tuple[list[dict], list[str], bool]:
     qhash = query_hash(query)
     cache_key = (case_id, qhash)
 
@@ -129,27 +135,19 @@ async def _retrieve_one(case_id: str, query: str, top_n: int) -> tuple[list[dict
     if not hits:
         return [], [], False
 
-    # The agent node owns every paper it retrieved, whether or not a claim ends
-    # up citing it. Without this the unused results sit on the graph as orphans
-    # — visible papers connected to nothing, which reads as noise rather than
-    # as "these were consulted and found not to support the claim."
+    # Papers hang off WHATEVER PROMPTED THE SEARCH — the error under
+    # investigation — not off the Literature Retrieval agent. Parenting them to
+    # the agent made it a large competing hub on screen and buried the thing a
+    # reader actually wants to follow: this error was investigated, here is what
+    # the literature said, here is what was concluded. The flow now reads
+    # error -> literature -> complication.
     #
-    # This is deliberately distinct from an `evidence` edge. Retrieved means
-    # consulted; evidence means it actually supports the claim that cites it.
-    # Collapsing the two would make the evidence edges meaningless.
-    patches = [
-        (
-            GraphNodePatch(
-                node_id=node_ids.agent(SOURCE_AGENT),
-                node_type="agent",
-                label="Literature Retrieval",
-                source_agent=SOURCE_AGENT,
-                source_tool=_SOURCE_TOOL,
-            ),
-            None,
-            "Literature Retrieval registered for this case",
-        )
-    ]
+    # A `hierarchy` edge here is deliberately distinct from an `evidence` edge.
+    # Retrieved means consulted; evidence means it actually supports the claim
+    # that cites it. Collapsing the two would make evidence edges meaningless
+    # and would quietly imply every result backed the conclusion.
+    parent = parent_node_id or node_ids.agent(SOURCE_AGENT)
+    patches: list[tuple] = []
     written_ids = []
     for i, hit in enumerate(hits[:top_n]):
         node_id = node_ids.literature_evidence(qhash, i)
@@ -188,8 +186,8 @@ async def _retrieve_one(case_id: str, query: str, top_n: int) -> tuple[list[dict
             (
                 None,
                 GraphEdgePatch(
-                    edge_id=node_ids.edge(node_ids.agent(SOURCE_AGENT), node_id, "hierarchy"),
-                    source_node_id=node_ids.agent(SOURCE_AGENT),
+                    edge_id=node_ids.edge(parent, node_id, "hierarchy"),
+                    source_node_id=parent,
                     target_node_id=node_id,
                     edge_kind="hierarchy",
                     source_agent=SOURCE_AGENT,
