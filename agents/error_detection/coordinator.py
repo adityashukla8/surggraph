@@ -66,6 +66,7 @@ Error Detection through the standard ADK flow during the live demo.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable
 
@@ -106,6 +107,9 @@ _DEEP_AGENTS = {
     for role in _ROLES
     for category in _CATEGORIES
 }
+
+
+logger = logging.getLogger(__name__)
 
 
 class CategoryResult(BaseModel):
@@ -320,7 +324,19 @@ async def run_error_detection_sweep(
         assessment = await coro
         results.append(assessment)
         if on_window_complete is not None:
-            await on_window_complete(assessment)
+            try:
+                await on_window_complete(assessment)
+            except Exception:
+                # docs/agentic_workflow.md §10: a failed window means no error
+                # nodes for THAT window and nothing downstream triggering — it
+                # does not mean the case stops. A transient write failure took
+                # down an entire sweep before this guard existed, so no error
+                # node was ever written and the whole reasoning chain behind it
+                # never ran. Logged, never swallowed silently.
+                logger.exception(
+                    "error_detection: on_window_complete failed for %s — dropping this window, sweep continues",
+                    assessment.window_id,
+                )
     return results
 
 

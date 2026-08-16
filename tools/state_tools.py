@@ -61,13 +61,60 @@ _HTTP_TIMEOUT_S = 30
 _async_clients: dict[object, httpx.AsyncClient] = {}
 
 
+# Uvicorn closes an idle keep-alive connection after 5s by default, while this
+# system's writers can legitimately go far longer than that between calls — an
+# Error Detection window is 15s+ of Gemini latency before its next write. httpx
+# pools and reuses connections, so it would hand back a socket the server had
+# already closed, and the next request died with a bare ReadError. That is
+# exactly what killed the Error Detection sweep on its first window: no error
+# node was ever written, so nothing downstream of it could fire either.
+#
+# `requests` never hit this because, used without a Session, it opens a fresh
+# connection per call — the pooling that makes httpx faster is what exposed it.
+#
+# Expire pooled connections comfortably before the server does. Reuse still
+# works for the rapid-fire batched writes that actually benefit from it.
+_KEEPALIVE_EXPIRY_S = 3.0
+
+# Transport-level errors are connection failures, not application failures: the
+# request never reached the server, so retrying it is safe and cannot duplicate
+# a write.
+_TRANSPORT_RETRIES = 3
+
+
 def _get_async_client() -> httpx.AsyncClient:
     loop = asyncio.get_running_loop()
     client = _async_clients.get(loop)
     if client is None or client.is_closed:
-        client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
+        client = httpx.AsyncClient(
+            timeout=_HTTP_TIMEOUT_S,
+            limits=httpx.Limits(keepalive_expiry=_KEEPALIVE_EXPIRY_S),
+            transport=httpx.AsyncHTTPTransport(retries=_TRANSPORT_RETRIES),
+        )
         _async_clients[loop] = client
     return client
+
+
+async def _request_with_retry(send, what: str):
+    """Retries a request that failed at the transport layer.
+
+    A stale pooled connection is the common case and succeeds immediately on
+    the retry with a fresh one. Kept separate from the 503 contention retry:
+    that one is the server saying "busy, try again", this one is the request
+    never having arrived.
+    """
+    last: Exception | None = None
+    for attempt in range(1, _TRANSPORT_RETRIES + 2):
+        try:
+            return await send()
+        except (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError, httpx.WriteError) as exc:
+            last = exc
+            if attempt > _TRANSPORT_RETRIES:
+                break
+            logger.warning("%s: transport error (%s), retrying %d/%d", what, type(exc).__name__, attempt, _TRANSPORT_RETRIES)
+            await asyncio.sleep(0.2 * attempt)
+    assert last is not None
+    raise last
 
 
 # --- Write serialization + retry -------------------------------------------
@@ -110,7 +157,7 @@ async def _post_patch_async(state_service_url: str, case_id: str, event: StateDi
     async with _get_case_lock(case_id):
         last_error: Exception | None = None
         for attempt, backoff in enumerate((*_RETRY_BACKOFF_S, None)):
-            resp = await client.post(url, json=payload)
+            resp = await _request_with_retry(lambda: client.post(url, json=payload), f"patch {case_id}")
             if resp.status_code != 503:
                 resp.raise_for_status()
                 # The server's response is authoritative (real seq assigned
@@ -138,7 +185,9 @@ async def _post_patch_async(state_service_url: str, case_id: str, event: StateDi
 
 async def _get_snapshot_async(state_service_url: str, case_id: str) -> StateSnapshot:
     client = _get_async_client()
-    resp = await client.get(f"{state_service_url}/state/{case_id}/snapshot")
+    resp = await _request_with_retry(
+        lambda: client.get(f"{state_service_url}/state/{case_id}/snapshot"), f"snapshot {case_id}"
+    )
     resp.raise_for_status()
     return StateSnapshot.model_validate(resp.json())
 # Real finding (Anticipation Agent's end-to-end test, once it became a
@@ -258,9 +307,12 @@ async def apply_state_patches(case_id: str, patches: list[tuple[GraphNodePatch |
     if state_service_url:
         client = _get_async_client()
         async with _get_case_lock(case_id):
-            resp = await client.post(
-                f"{state_service_url}/state/{case_id}/patch/batch",
-                json=[e.model_dump(mode="json") for e in events],
+            resp = await _request_with_retry(
+                lambda: client.post(
+                    f"{state_service_url}/state/{case_id}/patch/batch",
+                    json=[e.model_dump(mode="json") for e in events],
+                ),
+                f"batch patch {case_id}",
             )
             resp.raise_for_status()
             committed = [StateDiffEvent.model_validate(item) for item in resp.json()]

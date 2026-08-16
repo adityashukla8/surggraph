@@ -309,7 +309,15 @@ async def perception_case(
         decision = pipeline.process(obs)
         await write_audit_record(case_id, obs, raw, decision.suppressed)
         vitals = sample_at(window.start_s, case_duration_s)
-        written = await _emit(case_id, pipeline, decision, obs, vitals, spine)
+        try:
+            written = await _emit(case_id, pipeline, decision, obs, vitals, spine)
+        except Exception:
+            # Same rule as the Gemini failure above: a window that cannot be
+            # written is a lost window, not a lost case. The pipeline's own
+            # state has already advanced, so the next window diffs correctly
+            # against this one.
+            logger.exception("perception[%s]: emit failed for window %d, continuing", case_id, window_index)
+            continue
 
         if written == 0 and pipeline.heartbeat_due(obs.video_time_s):
             # Steady state has run long enough to be worth proving liveness —
