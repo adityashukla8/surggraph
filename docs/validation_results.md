@@ -1,5 +1,7 @@
 # Validation results — tracked over time
 
+Companion: `docs/qa_log.md` tracks correctness defects found by running the system; this file tracks measured accuracy.
+
 Consolidated, dated record of every real validation run against this project — the single place to check "how good is this actually," instead of digging through code comments or re-running things to find out. **Update this file every time a validation script gets run for real**, not just when something changes; a missing entry here is a real gap, not an implied "unchanged."
 
 Before this file existed, results were scattered across `agents/monitor/aggregation.py`'s own TODO comment and `docs/latency_optimization.md` (which is about latency, not accuracy) — kept there too where relevant, but this is now the canonical index.
@@ -32,6 +34,7 @@ No ground-truth name legend exists for this dataset, so "was the phase NAME righ
 | Date | Command | Result |
 |---|---|---|
 | 2026-08-15 | `uv run pytest tests/ -q` | 45/45 passing |
+| 2026-08-16 | `uv run pytest tests/ -q` | 70/70 passing (16 perception pipeline, 9 corrective action library) |
 
 Real-data assertions throughout (no mocked-Gemini harness by design — matches `test_fhir_write_readback.py`'s own "hits the real thing" philosophy). Does not cover live Gemini vision calls themselves; those are only exercised by real end-to-end runs, not unit tests.
 

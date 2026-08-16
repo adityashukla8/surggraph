@@ -7,6 +7,8 @@
 
 Older docs are historical record, not constraints on this plan: `docs/HANDOVER.md` (what the pre-rescope build was), `docs/validation_results.md` (real measured accuracy, still valid for the components that survive), `docs/latency_optimization.md`, and `~/.claude/plans/consider-the-initial-11082026-md-harmonic-cloud.md` (why the earlier design decisions were made — CARES grounding, ground-truth rules, Firestore multi-tenancy; the *principles* there still bind, the *scope* does not).
 
+`docs/qa_log.md` records every real defect found by running the system, and how it was caught — worth reading before changing anything that writes to the graph.
+
 §15 inventories what already exists and where it lands under this plan. §16 lists design decisions that need making before coding.
 
 ---
