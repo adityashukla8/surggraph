@@ -22,6 +22,7 @@ text, so a genuinely different question always goes out to the network.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import logging
@@ -76,110 +77,168 @@ def query_hash(query: str) -> str:
     return hashlib.sha256(query.strip().lower().encode()).hexdigest()[:12]
 
 
+# Per-query cap before merging. Europe PMC's own relevance ranking is fine at
+# this scale — it only breaks when an over-constrained AND has starved it of
+# candidates, which is what the decomposition upstream exists to prevent.
+PER_QUERY_LIMIT = 25
+
+# Reciprocal Rank Fusion constant. This is the published default from Cormack,
+# Clarke & Buettcher (SIGIR 2009), not a number chosen here — RRF is the
+# standard way to merge ranked lists from different queries without needing
+# comparable scores between them, which matters because Europe PMC returns no
+# score at all for a live search.
+RRF_K = 60
+
+
 async def retrieve(
     case_id: str,
-    query: str,
+    queries: list[str],
     top_n: int = DEFAULT_TOP_N,
-    fallbacks: list[str] | None = None,
     parent_node_id: str | None = None,
 ) -> tuple[list[dict], list[str], bool]:
-    """Runs a retrieval and writes its results as literature_evidence nodes.
+    """Runs several short queries in parallel and merges their results.
 
-    `fallbacks` are progressively broader phrasings, tried in order only if the
-    primary returns nothing. Europe PMC requires every term, so a precise
-    clinical query can legitimately match zero papers while a broader one
-    matching the same question returns several — measured, not assumed.
+    One long query does not rank badly on this API — it starves the ranker.
+    Every term is an AND clause, so a precise-sounding query eliminates the
+    papers it was meant to find. Several short queries along independent axes
+    each return real candidates, and merging them is where the precision comes
+    back: a paper surfaced by more than one angle is almost certainly on topic.
 
-    Returns (hits, node_ids, evidence_available). `evidence_available` is False
-    when every attempt genuinely returned nothing — deliberately distinct from
-    "we did not look", so a downstream reasoner can tell an unsupported claim
-    from an unexamined one.
+    Ranking is Reciprocal Rank Fusion, which needs only each paper's POSITION
+    within each result list. That matters because a live Europe PMC search
+    returns no relevance score, so there is nothing to average or normalise.
+
+    Returns (hits, node_ids, evidence_available).
     """
-    for candidate in [query, *(fallbacks or [])]:
-        if not candidate or not candidate.strip():
-            continue
-        hits, ids, ok = await _retrieve_one(case_id, candidate, top_n, parent_node_id)
-        if ok:
-            if candidate != query:
-                logger.info("literature[%s]: primary query found nothing; %r did", case_id, candidate[:60])
-            return hits, ids, ok
-    return [], [], False
-
-
-async def _retrieve_one(
-    case_id: str, query: str, top_n: int, parent_node_id: str | None
-) -> tuple[list[dict], list[str], bool]:
-    qhash = query_hash(query)
-    cache_key = (case_id, qhash)
-
-    if cache_key in _cache:
-        hits = _cache[cache_key]
-        logger.info("literature[%s]: cache hit for %r (%d results)", case_id, query[:60], len(hits))
-    else:
-        hits = []
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
-            try:
-                # live=True: the point is on-demand retrieval against real
-                # current literature for the question the agent actually
-                # formulated, not a lookup in a corpus pre-seeded with
-                # questions someone anticipated.
-                result = search_literature(query, k=top_n, live=True)
-                hits = result.get("hits", [])
-                break
-            except Exception:
-                logger.warning("literature[%s]: attempt %d/%d failed for %r", case_id, attempt, _MAX_ATTEMPTS, query[:60])
-        else:
-            logger.exception("literature[%s]: retrieval exhausted for %r", case_id, query[:60])
-        _cache[cache_key] = hits
-
-    if not hits:
+    wanted = [q for q in queries if q and q.strip()]
+    if not wanted:
         return [], [], False
 
+    # Genuinely concurrent — these are independent network calls, and running
+    # four sequentially would add seconds to a path that already waits on two
+    # Gemini calls.
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_search_one, case_id, q) for q in wanted), return_exceptions=True
+    )
+
+    ranked_lists: list[list[dict]] = []
+    for query, result in zip(wanted, results):
+        if isinstance(result, Exception):
+            logger.warning("literature[%s]: query %r failed: %s", case_id, query[:60], type(result).__name__)
+            continue
+        logger.info("literature[%s]: %d hit(s) for %r", case_id, len(result), query[:60])
+        ranked_lists.append(result)
+
+    merged = _reciprocal_rank_fusion(ranked_lists)[:top_n]
+    if not merged:
+        return [], [], False
+
+    node_ids_written = await _write_literature_nodes(case_id, merged, parent_node_id)
+    logger.info(
+        "literature[%s]: %d queries -> %d unique papers -> top %d (%d hit by >1 query)",
+        case_id,
+        len(ranked_lists),
+        sum(len(r) for r in ranked_lists),
+        len(merged),
+        sum(1 for h in merged if h["_query_count"] > 1),
+    )
+    return merged, node_ids_written, True
+
+
+def _search_one(case_id: str, query: str) -> list[dict]:
+    """One query, cached per case. Blocking — the caller runs these in threads."""
+    cache_key = (case_id, query_hash(query))
+    if cache_key in _cache:
+        return _cache[cache_key]
+    hits = search_literature(query, k=PER_QUERY_LIMIT, live=True).get("hits", [])
+    for hit in hits:
+        hit["query_used"] = query
+    _cache[cache_key] = hits
+    return hits
+
+
+def _paper_key(hit: dict) -> str:
+    """Identity across queries. The same paper must collapse to one entry or
+    the whole point of boosting multi-query hits is lost."""
+    return str(hit.get("doc_id") or hit.get("pmcid") or hit.get("url") or hit.get("title", ""))
+
+
+def _reciprocal_rank_fusion(ranked_lists: list[list[dict]]) -> list[dict]:
+    """Merges ranked lists by summed reciprocal rank.
+
+    A paper at position 1 of one list scores 1/(60+1); appearing in three lists
+    accumulates three such terms. So a paper found by several independent
+    angles outranks one that topped a single list — which is exactly the signal
+    we want, since agreement between differently-phrased queries is the best
+    available evidence of topicality when no relevance score exists.
+    """
+    scores: dict[str, float] = {}
+    best: dict[str, dict] = {}
+    counts: dict[str, int] = {}
+    queries_hit: dict[str, list[str]] = {}
+
+    for hits in ranked_lists:
+        for rank, hit in enumerate(hits, start=1):
+            key = _paper_key(hit)
+            if not key:
+                continue
+            scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+            counts[key] = counts.get(key, 0) + 1
+            queries_hit.setdefault(key, []).append(hit.get("query_used", ""))
+            best.setdefault(key, hit)
+
+    merged = []
+    for key, score in sorted(scores.items(), key=lambda kv: kv[1], reverse=True):
+        hit = dict(best[key])
+        hit["_rrf_score"] = round(score, 5)
+        hit["_query_count"] = counts[key]
+        hit["_queries_hit"] = queries_hit[key]
+        merged.append(hit)
+    return merged
+
+
+async def _write_literature_nodes(case_id: str, hits: list[dict], parent_node_id: str | None) -> list[str]:
     # Papers hang off WHATEVER PROMPTED THE SEARCH — the error under
     # investigation — not off the Literature Retrieval agent. Parenting them to
-    # the agent made it a large competing hub on screen and buried the thing a
-    # reader actually wants to follow: this error was investigated, here is what
-    # the literature said, here is what was concluded. The flow now reads
-    # error -> literature -> complication.
+    # the agent made it a large competing hub on screen and buried the sequence
+    # a reader actually follows: error -> literature -> complication.
     #
     # A `hierarchy` edge here is deliberately distinct from an `evidence` edge.
     # Retrieved means consulted; evidence means it actually supports the claim
-    # that cites it. Collapsing the two would make evidence edges meaningless
-    # and would quietly imply every result backed the conclusion.
+    # that cites it.
     parent = parent_node_id or node_ids.agent(SOURCE_AGENT)
     patches: list[tuple] = []
-    written_ids = []
-    for i, hit in enumerate(hits[:top_n]):
-        node_id = node_ids.literature_evidence(qhash, i)
+    written_ids: list[str] = []
+
+    for i, hit in enumerate(hits):
+        node_id = node_ids.literature_evidence(query_hash(_paper_key(hit)), i)
         written_ids.append(node_id)
         patches.append(
             (
                 GraphNodePatch(
                     node_id=node_id,
                     node_type="literature_evidence",
-                    label=_clean(hit.get("title")) [:120] or "(untitled)",
+                    label=_clean(hit.get("title"))[:120] or "(untitled)",
                     attrs={
                         "pmcid": hit.get("pmcid"),
-                        "pmid": hit.get("pmid"),
-                        "doi": hit.get("doi"),
+                        "doc_id": hit.get("doc_id"),
                         "url": hit.get("url"),
                         "journal": hit.get("journal"),
-                        "doc_id": hit.get("doc_id"),
                         "year": hit.get("year"),
-                        # The API's field is `snippet`, not `abstract`.
                         "snippet": _clean(hit.get("snippet"))[:600],
-                        # The query is stored ON the node: an evidence node
-                        # whose originating question is lost cannot be audited
-                        # for whether it actually supports what cites it.
-                        "query_used": query,
-                        "query_hash": qhash,
+                        # Which queries surfaced this, and how many. A paper
+                        # found by several independent angles is a stronger
+                        # candidate, and that is auditable rather than implied.
+                        "queries_hit": hit.get("_queries_hit", []),
+                        "query_count": hit.get("_query_count", 1),
+                        "rrf_score": hit.get("_rrf_score"),
                         "retrieved_live": True,
                     },
                     source_agent=SOURCE_AGENT,
                     source_tool=_SOURCE_TOOL,
                 ),
                 None,
-                f"Retrieved for query: {query[:100]}",
+                f"Retrieved by {hit.get('_query_count', 1)} quer(y/ies)",
             )
         )
         patches.append(
@@ -192,15 +251,14 @@ async def _retrieve_one(
                     edge_kind="hierarchy",
                     source_agent=SOURCE_AGENT,
                     source_tool=_SOURCE_TOOL,
-                    reason=f"Consulted for: {query[:80]}",
+                    reason="Consulted during this investigation",
                 ),
-                f"Consulted for: {query[:80]}",
+                "Consulted during this investigation",
             )
         )
 
     await apply_state_patches(case_id, patches)
-    logger.info("literature[%s]: %d result(s) for %r", case_id, len(written_ids), query[:60])
-    return hits, written_ids, True
+    return written_ids
 
 
 def evidence_edges(literature_node_ids: list[str], target_node_id: str, reason: str) -> list[tuple]:

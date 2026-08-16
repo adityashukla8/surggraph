@@ -37,16 +37,23 @@ from tools.gemini_model import new_agent_model
 
 
 class LiteratureQuery(BaseModel):
-    query: str  # the agent's own words, composed from live case context
-    # A deliberately broader second attempt, also the agent's own. Europe PMC
-    # requires every term, so a precise query can return literally nothing —
-    # measured: eight words returned four results, ten returned zero. The agent
-    # decides what to drop, because only it knows which terms carry the
-    # clinical question and which are incidental detail. A deterministic
-    # truncation here would strip terms blindly.
-    broader_query: str
-    rationale: str  # one sentence: why this is the right question to ask
-    initial_concerns: list[str] = Field(default_factory=list)  # hypotheses to test against what comes back
+    """A set of short, independent queries rather than one long one.
+
+    Europe PMC is a boolean AND system: the query string is a CONSTRAINT, not a
+    description. Every word is another clause the paper must literally contain.
+    Measured on this project: going from 4 to 10 terms took a real clinical
+    question from 608 hits to 1, and that single survivor was a conference
+    abstract book — the only document dense enough to contain every term
+    somewhere. Long queries do not rank badly, they starve the ranker.
+
+    So the agent decomposes instead of elaborating, the way a medical
+    librarian runs several narrow searches and triangulates rather than typing
+    one long string.
+    """
+
+    queries: list[str] = Field(min_length=2, max_length=5)
+    rationale: str  # one sentence: what angles these cover between them
+    initial_concerns: list[str] = Field(default_factory=list)
 
 
 class ComplicationCandidate(BaseModel):
@@ -70,28 +77,73 @@ you are deciding what to ask the published literature about it.
 You will be given the detected error, the synthetic patient profile, the recent
 vitals trend, the current surgical activity, and any recent related errors.
 
-Compose ONE literature search query that would surface evidence about the
-downstream complications this specific error could cause in this specific
-patient. Good queries name the anatomy and the mechanism, and where the patient
-profile is genuinely relevant (prostate volume, nerve-sparing intent, BMI, a
-vitals excursion) they reflect it. A query that just restates the error
-category will return generic results and is a wasted retrieval.
+Produce THREE TO FIVE SHORT, INDEPENDENT QUERIES — not one long one.
 
-Do not use boolean operators or field tags — this goes to a plain search API,
-and EVERY term you include is required, so each extra word can only narrow the
-result set. Measured against the real API: an eight-word query returned four
-results and a ten-word one returned zero. Keep `query` to five to eight words.
+This is a boolean AND search, not a semantic search engine. Every word you
+include is a clause the paper must literally contain somewhere. Adding a word
+never refines the ranking; it deletes papers. Measured against this exact API:
+a four-word query returned 608 real papers, and the same question at ten words
+returned one irrelevant conference abstract book.
 
-Also give `broader_query`: the same clinical question stripped to its three or
-four load-bearing terms, used only if the first returns nothing. You choose
-what to drop, since you know which terms carry the question and which are
-incidental detail.
+Treat every word as an assertion you are forcing the search to satisfy. If you
+would be surprised to find that literal word in a relevant paper's abstract,
+leave it out.
 
-Also list the specific complications you already suspect, so they can be tested
-against what actually comes back. Being wrong here is fine and expected; the
-retrieved evidence is what decides.
+RULES:
 
-rationale: ONE sentence on why this is the right question."""
+1. NEVER exceed four content words per query. Hard cap. If a concept needs six
+   words, it is two queries of three, not one of six.
+
+2. Every word must be one you would expect literally in a relevant abstract.
+   Framing words — "possible", "risk of", "in patients with", "post-operative"
+   — are not search terms. They add clauses that delete real papers whose
+   authors happened to phrase things differently.
+
+3. Anchor on the NOUN FORM of the complication plus the procedure name. Those
+   are the two load-bearing concepts. Everything else is a specialization.
+
+4. Medical synonyms go in SEPARATE queries, never combined. "bladder neck
+   contracture" and "vesicourethral anastomosis stricture" are the same
+   clinical entity in overlapping literature; AND-ing them returns nothing,
+   while running both roughly doubles coverage.
+
+5. Decompose along INDEPENDENT AXES — complication/procedure,
+   mechanism/outcome, anatomy/intervention. Each is a different way into the
+   same literature. This is the PICO idea: different facets, searched
+   separately.
+
+6. NO patient descriptors unless they are genuinely discriminating. Appending
+   "diabetic" to a query does not find papers about diabetic patients — it
+   finds papers that happen to mention diabetes for unrelated reasons. If a
+   comorbidity actually matters, give it its own query
+   ("diabetes wound healing prostatectomy"), never as a modifier on another.
+
+SYNTAX YOU SHOULD USE:
+
+- QUOTE multi-word concepts: "bladder neck contracture" searches that exact
+  phrase. Unquoted, those three words are AND-ed independently and may appear
+  scattered anywhere in an unrelated paper.
+- Field prefixes are available and precise:
+    TITLE:"..."     the phrase must be in the title (very precise, low recall)
+    ABSTRACT:"..."  in the abstract
+    KW:"..."        in the paper's keywords
+    MESH:"..."      the paper's MeSH indexing — the controlled vocabulary that
+                    indexes it by topic regardless of the words the authors used
+  A good precise query is KW:"radical prostatectomy" AND ABSTRACT:"bladder neck
+  contracture". Use AT MOST ONE such field-scoped query in your set: measured
+  here, combining MESH with KW collapsed a real question to a single hit, so
+  field scoping buys precision at a real cost in recall.
+
+A GOOD SET for excessive bladder-neck traction might be:
+  "bladder neck contracture" "prostatectomy"        (complication + procedure)
+  "vesicourethral anastomosis" stricture            (the synonym)
+  "anastomotic leak" "radical prostatectomy"        (the sibling complication)
+  KW:"radical prostatectomy" AND ABSTRACT:"bladder neck contracture"
+
+Also list the complications you already suspect, so they can be tested against
+what actually comes back. Being wrong is expected; the evidence decides.
+
+rationale: ONE sentence on what angles these queries cover between them."""
 
 
 _REASON_INSTRUCTION = """You are the Complication Reasoning Agent. You asked the

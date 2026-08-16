@@ -173,11 +173,11 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
     query_out: LiteratureQuery = await run_llm_agent_once(
         QUERY_AGENT, _as_content(_format_slice(slice_context)), LiteratureQuery, app_name="surggraph_complication_query"
     )
-    logger.info("complication[%s]: query %r (fallback %r)", case_id, query_out.query, query_out.broader_query)
+    logger.info("complication[%s]: %d queries: %s", case_id, len(query_out.queries), query_out.queries)
 
-    # Step 2 — a real retrieval against real literature.
+    # Step 2 — real retrieval, several short queries in parallel, merged.
     hits, literature_node_ids, evidence_available = await retrieve(
-        case_id, query_out.query, fallbacks=[query_out.broader_query], parent_node_id=error_node_id
+        case_id, query_out.queries, parent_node_id=error_node_id
     )
 
     # Step 3 — reason over what actually came back.
@@ -214,7 +214,7 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
                         # the UI can show the difference honestly.
                         "evidence_backed": candidate.evidence_backed,
                         "evidence_available": evidence_available,
-                        "query_used": query_out.query,
+                        "queries_used": query_out.queries,
                         "root_error_id": error_node_id,
                         "reasoning": assessment.reasoning,
                     },
