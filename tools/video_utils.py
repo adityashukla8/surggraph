@@ -42,6 +42,26 @@ VIDEO_DIR = DATA_ROOT / "video"
 # measured choice, not an arbitrary default.
 DEFAULT_WINDOW_S = float(os.environ.get("SURGGRAPH_WINDOW_S", "5.0"))
 
+
+def _optional_float_env(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else None
+
+
+# Optional bounds on how much of a video a case sweeps, for development.
+#
+# Every unbounded run costs a full video's worth of real Gemini calls across
+# two concurrent sweeps, which is slow and genuinely expensive to iterate
+# against. Setting these to a short opening range makes a test cycle minutes
+# instead of tens of minutes.
+#
+# Unset means the full real duration, so production behaviour is the default
+# and nothing here silently shortens a real case. The bound is also visible on
+# the graph rather than hidden: the trigger node's label carries the real range
+# it swept, so a case that only covered the first ninety seconds says so.
+SWEEP_START_S = _optional_float_env("SURGGRAPH_SWEEP_START_S")
+SWEEP_END_S = _optional_float_env("SURGGRAPH_SWEEP_END_S")
+
 _VIDEO_MIME_TYPES = {
     ".avi": "video/x-msvideo",
     ".mp4": "video/mp4",

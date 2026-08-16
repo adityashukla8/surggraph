@@ -52,7 +52,7 @@ from state import event_bus, node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.patient_twin import load_patient_twin, summarize_for_prompt as summarize_patient_twin
 from tools.state_tools import apply_state_patch, apply_state_patches
-from tools.video_utils import find_video_duration_s, format_video_time_range
+from tools.video_utils import SWEEP_END_S, SWEEP_START_S, find_video_duration_s, format_video_time_range
 
 # Real, fixed pipeline structure (not decorative) — Orchestrator dispatches
 # exactly these three agents; Error Detection Coordinator owns exactly these three
@@ -250,12 +250,30 @@ async def open_case(
     Concurrent, not sequential: real measured latency makes running
     independent agents back-to-back a real, unjustified multiplication of
     demo wait time — they write independent nodes/edges to the same graph."""
+    # An explicit argument always wins. Otherwise fall back to the configured
+    # development bounds (tools/video_utils.SWEEP_START_S/SWEEP_END_S), and
+    # only then to the video's own real duration.
     if start_s is None:
-        start_s = 0.0
+        start_s = SWEEP_START_S if SWEEP_START_S is not None else 0.0
+    if end_s is None:
+        end_s = SWEEP_END_S
     if end_s is None:
         end_s = find_video_duration_s(video_id)
         if end_s is None:
             raise ValueError(f"no source video found for {video_id!r} — cannot derive real duration to sweep")
+    else:
+        # Never let a configured bound run past the real end of the video.
+        real_duration = find_video_duration_s(video_id)
+        if real_duration is not None:
+            end_s = min(end_s, real_duration)
+
+    if SWEEP_END_S is not None:
+        logger.warning(
+            "case %s sweeping a BOUNDED range %.0f-%.0fs (SURGGRAPH_SWEEP_END_S is set) — not the full video",
+            case_id,
+            start_s,
+            end_s,
+        )
 
     await _draw_static_hierarchy(case_id, start_s, end_s, video_id)
 

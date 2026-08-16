@@ -225,6 +225,19 @@ async def _emit(case_id: str, pipeline: PerceptionPipeline, decision, obs: Windo
     for event_node_id in pending_event_ids:
         patches.append(link(anchor, event_node_id, "hierarchy", "Observed during this activity", _SOURCE_TOOL))
 
+    # The snapshot slots are the agent's live view of the case, so they hang off
+    # it rather than floating. Linked in the SAME batch that first creates them,
+    # not up front: a slot node only exists once a window has something to put
+    # in it, and an edge written before its endpoint dangles until then — which
+    # is exactly what the chain validator caught. Batch order guarantees the
+    # node lands before the edge, since the store assigns seqs in list order.
+    slots_in_this_batch = {
+        node.node_id for node, _edge, _reason in patches if node is not None and node.node_type == "snapshot"
+    }
+    for slot in sorted(slots_in_this_batch - spine["slots_linked"]):
+        patches.append(link(node_ids.agent(SOURCE_AGENT), slot, "hierarchy", "Live case state", _SOURCE_TOOL))
+        spine["slots_linked"].add(slot)
+
     await apply_state_patches(case_id, patches)
     return written
 
@@ -251,23 +264,9 @@ async def perception_case(
 
     # Carries the tail of the activity chain across windows. A dict rather than
     # a local so _emit can advance it.
-    spine: dict = {"previous_phase_node_id": None}
+    spine: dict = {"previous_phase_node_id": None, "slots_linked": set()}
 
-    # The four fixed snapshot slots are the agent's live view of the case, so
-    # they hang off it rather than floating. Written once up front — the slots
-    # never change identity, only content.
-    await apply_state_patches(
-        case_id,
-        [
-            link(node_ids.agent(SOURCE_AGENT), slot, "hierarchy", "Live case state", _SOURCE_TOOL)
-            for slot in (
-                node_ids.SNAPSHOT_CURRENT_PHASE,
-                node_ids.SNAPSHOT_CURRENT_ACTIVITY,
-                node_ids.SNAPSHOT_ACTIVE_ENTITY_SET,
-                node_ids.SNAPSHOT_CURRENT_VITALS,
-            )
-        ],
-    )
+
     try:
         segments = load_action_segments(video_id)
     except FileNotFoundError:
