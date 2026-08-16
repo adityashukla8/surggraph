@@ -35,6 +35,22 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
             it. layout.ts measures the real rendered width and feeds it to
             dagre so growth never causes overlap. */}
         <span className="case-node__label">{data.label}</span>
+        {/* A node that reached the real world links to it. Clicking through to
+            a third-party FHIR server is what makes an external write
+            inspectable rather than merely asserted. nodrag/nopan so the click
+            is a click and not the start of a canvas drag. */}
+        {data.externalUrl && (
+          <a
+            className="case-node__external nodrag nopan"
+            href={data.externalUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open the real record: ${data.externalUrl}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            ↗
+          </a>
+        )}
       </div>
       {(data.confidence !== undefined || statusColor || data.severityBand) && (
         <div className="case-node__meta">

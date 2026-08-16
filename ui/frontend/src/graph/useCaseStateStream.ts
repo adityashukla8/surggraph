@@ -21,6 +21,7 @@ function toFlowNode(patch: GraphNodePatch): CaseFlowNode {
       timestamp: patch.timestamp,
       predicted: Boolean(patch.attrs?.predicted),
       severityBand: typeof patch.attrs?.severity_band === "string" ? (patch.attrs.severity_band as string) : undefined,
+      externalUrl: typeof patch.attrs?.resource_url === "string" ? (patch.attrs.resource_url as string) : undefined,
       confidence: typeof patch.attrs?.confidence === "number" ? (patch.attrs.confidence as number) : undefined,
       confirmationSignal: patch.attrs?.confirmation_signal as CaseFlowNode["data"]["confirmationSignal"],
       raw: patch,
