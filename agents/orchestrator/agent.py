@@ -45,6 +45,7 @@ from google.genai import types
 
 from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.complication_reasoning import agent as complication_reasoning
+from agents.corrective_replanning import agent as corrective_replanning
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
@@ -77,6 +78,7 @@ _TOP_LEVEL_AGENTS = (
     # unreachable from the trigger until then.
     ("agent:complication_reasoning", "complication_reasoning", "Complication Reasoning"),
     ("agent:literature_retrieval", "literature_retrieval", "Literature Retrieval"),
+    ("agent:corrective_replanning", "corrective_replanning", "Corrective Replanning"),
 )
 
 logger = logging.getLogger(__name__)
@@ -284,6 +286,7 @@ async def open_case(
     # early errors a fast sweep produces first.
     bus = event_bus.get_bus(case_id)
     complication_reasoning.subscribe(bus)
+    corrective_replanning.subscribe(bus)
 
     try:
         divergences, _perception_state = await asyncio.gather(

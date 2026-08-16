@@ -1,0 +1,159 @@
+{
+  "_disclosure": "PRE-AUTHORED, BOUNDED ACTION LIBRARY. Corrective Replanning selects from this list and never generates free-form clinical text. Every entry is derived from the OCHRA-grounded error definitions in agents/error_detection/knowledge.py — specifically from each category's own normal_indicators, which describe what correct technique looks like, so a corrective action is the stated inverse of the observed deviation rather than novel clinical advice.",
+
+  "_provenance": {
+    "tier": 2,
+    "tier_meaning": "Derived from published OCHRA error descriptions rather than quoted from a clinical guideline. Tier 1 would be a direct guideline recommendation; tier 3 would be unsourced authoring. Recorded honestly because these are surgical suggestions and the strength of their sourcing is part of what a reviewer needs to judge them.",
+    "derived_from": "agents/error_detection/knowledge.py::ERROR_KNOWLEDGE_LIBRARY (normal_indicators and error_indicators per category)",
+    "not_a_clinical_guideline": true,
+    "review_status": "Not reviewed by a practising surgeon. This is architectural demonstration content, not validated clinical decision support."
+  },
+
+  "_schema": {
+    "keyed_by": "error_category — the six CARES-collapsed OCHRA groupings",
+    "action_id": "stable, referenced by corrective_trajectory node ids",
+    "action": "short imperative, what to do",
+    "rationale": "why, traced to the OCHRA indicator it inverts",
+    "verification_check": "the observable that confirms the action took effect — what divergence detection later compares against",
+    "inverts_indicator": "the specific error_indicator this action addresses"
+  },
+
+  "categories": {
+    "multiple_attempts": [
+      {
+        "action_id": "ma_back_out_and_replan",
+        "action": "Fully withdraw the instrument and re-plan the approach before the next attempt",
+        "rationale": "OCHRA distinguishes a legitimate retry, which is preceded by a clear regrasp or reposition, from repetition driven by a failed prior attempt. Backing out fully converts the former into the latter.",
+        "verification_check": "The next attempt is preceded by a visible withdrawal and reposition, not an immediate re-approach to the same point",
+        "inverts_indicator": "The same piercing/grasp point is attempted 2+ times in quick succession"
+      },
+      {
+        "action_id": "ma_change_entry_point",
+        "action": "Move to a fresh tissue entry point rather than re-attempting the same one",
+        "rationale": "Repeated attempts at one point accumulate local trauma, and a point that has already failed twice is unlikely to succeed on a third identical attempt.",
+        "verification_check": "The subsequent attempt targets a visibly different point on the tissue",
+        "inverts_indicator": "Instrument tip re-approaches the same tissue target repeatedly without progress"
+      }
+    ],
+
+    "out_of_view": [
+      {
+        "action_id": "oov_recentre_camera",
+        "action": "Re-centre the endoscope so all active working tips are in frame before continuing",
+        "rationale": "OCHRA's normal state is that working tips of all active instruments remain in frame; restoring the view restores the surgeon's own error detection.",
+        "verification_check": "All active instrument tips are visible in frame in subsequent windows",
+        "inverts_indicator": "An instrument's tip is occluded or off-frame during active tissue interaction"
+      },
+      {
+        "action_id": "oov_pause_until_needle_visible",
+        "action": "Pause the pass and bring the needle back into view before completing it",
+        "rationale": "A needle that leaves frame mid-pass is unaccounted for, which is both a technique problem and a retained-item risk.",
+        "verification_check": "The needle is visible and under instrument control before the pass resumes",
+        "inverts_indicator": "Needle disappears from frame while a throw/pass is in progress"
+      },
+      {
+        "action_id": "oov_account_for_needle",
+        "action": "Confirm the needle is accounted for before moving to the next step",
+        "rationale": "Directly addresses the retained-foreign-body pathway that follows from losing sight of a needle.",
+        "verification_check": "The needle is visibly located and controlled before the next sub-step begins",
+        "inverts_indicator": "Needle disappears from frame while a throw/pass is in progress"
+      }
+    ],
+
+    "needle_handling": [
+      {
+        "action_id": "nh_regrasp_at_swage",
+        "action": "Release and re-grasp the needle at or near the swage, perpendicular to the driver",
+        "rationale": "OCHRA's normal state is a stable grasp at or near the swage with perpendicular orientation; a tip grasp or steep angle is what makes the needle slip or bend.",
+        "verification_check": "The needle is held at mid-body or swage with a stable perpendicular orientation in subsequent windows",
+        "inverts_indicator": "Needle grasped very close to the tip, or at a steep/awkward angle relative to the driver"
+      },
+      {
+        "action_id": "nh_stabilise_before_advancing",
+        "action": "Re-establish control of the needle before advancing it further through tissue",
+        "rationale": "Advancing a needle that is already slipping deepens the tissue injury the slip caused.",
+        "verification_check": "The needle stays under instrument control through the remainder of the pass",
+        "inverts_indicator": "Needle visibly slips or drops while partially embedded in tissue"
+      },
+      {
+        "action_id": "nh_locate_dropped_needle",
+        "action": "Stop and locate the needle before proceeding if control was lost",
+        "rationale": "A dropped needle is a retained-item risk that compounds the longer the case continues without accounting for it.",
+        "verification_check": "The needle is visibly recovered and under control before the next sub-step",
+        "inverts_indicator": "Needle visibly slips or drops while partially embedded in tissue"
+      }
+    ],
+
+    "tissue_handling": [
+      {
+        "action_id": "th_reduce_traction",
+        "action": "Reduce traction force and re-assess tissue response before continuing",
+        "rationale": "OCHRA's normal state is that tissue returns to its resting position and colour after release; blanching or tenting indicates force beyond what the step requires.",
+        "verification_check": "Blanching or tenting resolves and tissue returns to resting colour after release",
+        "inverts_indicator": "Visible blanching, tenting, or tearing at a grasp point"
+      },
+      {
+        "action_id": "th_regrasp_broader_purchase",
+        "action": "Release and re-grasp with a broader tissue purchase to distribute force",
+        "rationale": "A narrow grasp concentrates force at a point; spreading the purchase lowers local pressure for the same effective traction.",
+        "verification_check": "The subsequent grasp shows no localised blanching at the contact point",
+        "inverts_indicator": "Repeated forceful re-grasping of the same tissue region"
+      },
+      {
+        "action_id": "th_reorient_traction",
+        "action": "Re-orient the direction of traction to align with the plane being developed",
+        "rationale": "Force disproportionate to the sub-step is often a direction problem rather than a magnitude one, and pulling across a plane rather than along it tears rather than exposes.",
+        "verification_check": "Traction direction visibly follows the dissection plane in subsequent windows",
+        "inverts_indicator": "Traction direction/force appears disproportionate to what the sub-step requires"
+      }
+    ],
+
+    "suture_handling": [
+      {
+        "action_id": "sh_clear_entanglement",
+        "action": "Stop and clear the suture entanglement before the next throw",
+        "rationale": "OCHRA's normal state is a suture running cleanly with no visible loop or twist; throwing over an entanglement locks the fault into the closure.",
+        "verification_check": "The suture line runs cleanly with no visible loop or twist before the next throw",
+        "inverts_indicator": "Visible loop, twist, or entanglement in the suture line"
+      },
+      {
+        "action_id": "sh_adjust_tension",
+        "action": "Adjust suture tension to match the tissue gap being approximated",
+        "rationale": "Both slack and over-tension are named deviations: slack fails to appose, over-tension strangles the edge.",
+        "verification_check": "Tension appears even and proportionate to the tissue gap in subsequent windows",
+        "inverts_indicator": "Suture is noticeably slack or over-tensioned relative to the tissue gap"
+      },
+      {
+        "action_id": "sh_run_suture_before_continuing",
+        "action": "Run the suture through fully before placing the next throw",
+        "rationale": "Removes accumulated slack in one deliberate motion rather than mid-throw, which is when entanglement usually forms.",
+        "verification_check": "No mid-task pause to manually clear suture in subsequent windows",
+        "inverts_indicator": "The surgeon pauses to manually clear/untangle suture mid-task"
+      }
+    ],
+
+    "instrument_control": [
+      {
+        "action_id": "ic_separate_instruments",
+        "action": "Increase separation between the instrument arms before resuming",
+        "rationale": "OCHRA's normal state is adequate spacing between simultaneously-active instruments; clashing arms make both trajectories unpredictable.",
+        "verification_check": "No instrument-to-instrument contact in subsequent windows",
+        "inverts_indicator": "Visible clash or collision between the two instrument arms"
+      },
+      {
+        "action_id": "ic_reposition_idle_instrument",
+        "action": "Move the idle instrument clear of the active working field",
+        "rationale": "An instrument parked in the working field obstructs both the view and the other arm's path.",
+        "verification_check": "The idle instrument is visibly clear of the active field in subsequent windows",
+        "inverts_indicator": "One instrument idles awkwardly in a way that obstructs the other's working path"
+      },
+      {
+        "action_id": "ic_slow_and_recentre",
+        "action": "Slow the motion and re-centre the instruments before the next manoeuvre",
+        "rationale": "Overshooting and corrective micro-movements compound; resetting to a neutral position restores a predictable starting point.",
+        "verification_check": "Instrument trajectories appear smooth and deliberate in subsequent windows",
+        "inverts_indicator": "Jerky, overshooting, or corrective micro-movements beyond normal tremor filtering"
+      }
+    ]
+  }
+}
