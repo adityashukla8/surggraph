@@ -46,6 +46,7 @@ from google.genai import types
 from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.complication_reasoning import agent as complication_reasoning
 from agents.corrective_replanning import agent as corrective_replanning
+from agents.divergence_detection import agent as divergence_detection
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
@@ -79,6 +80,7 @@ _TOP_LEVEL_AGENTS = (
     ("agent:complication_reasoning", "complication_reasoning", "Complication Reasoning"),
     ("agent:literature_retrieval", "literature_retrieval", "Literature Retrieval"),
     ("agent:corrective_replanning", "corrective_replanning", "Corrective Replanning"),
+    ("agent:divergence_detection", "divergence_detection", "Divergence Detection"),
 )
 
 logger = logging.getLogger(__name__)
@@ -287,6 +289,7 @@ async def open_case(
     bus = event_bus.get_bus(case_id)
     complication_reasoning.subscribe(bus)
     corrective_replanning.subscribe(bus)
+    divergence_detection.subscribe(bus)
 
     try:
         divergences, _perception_state = await asyncio.gather(
@@ -297,7 +300,11 @@ async def open_case(
         # error may still be mid-flight — a complication reasoning pass is two
         # Gemini calls and a network fetch. Draining here is what keeps its
         # output in the case instead of being cancelled on the way out.
-        await bus.drain()
+        # The drain budget must cover a divergence monitor's full polling
+        # window, or the last proposal made in a case gets cancelled before
+        # it can ever report — which would silently lose exactly the
+        # divergences that matter most, the late ones.
+        await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
     finally:
         await event_bus.close_bus(case_id)
 
