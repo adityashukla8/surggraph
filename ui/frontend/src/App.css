@@ -306,6 +306,8 @@
      node renders at exactly the size dagre reserved for it. A width in CSS
      would silently override that and reintroduce the overlap. */
   height: 56px; /* must match NODE_HEIGHT in measureLabel.ts */
+  /* A proposal's HITL row makes it taller — must match
+     NODE_HEIGHT_WITH_CONTROLS, which layout.ts hands to dagre. */
   justify-content: center;
   padding: 8px 10px;
   border-radius: 8px;
@@ -313,6 +315,10 @@
   background: var(--surface-1);
   font-family: var(--font-sans);
   box-sizing: border-box;
+}
+
+.case-node--corrective_trajectory {
+  height: 78px;
 }
 
 .case-node--predicted {

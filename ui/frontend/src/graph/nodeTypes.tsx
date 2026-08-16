@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import type { CaseGraphNodeData } from "./types";
+import { acknowledgeProposal } from "../api/hitl";
 import {
   agentColorVar,
   nodeKindColorVar,
@@ -11,6 +13,8 @@ import {
 export type CaseFlowNode = Node<CaseGraphNodeData, "caseNode">;
 
 function CaseNode({ data }: NodeProps<CaseFlowNode>) {
+  const [hitlBusy, setHitlBusy] = useState(false);
+  const [hitlError, setHitlError] = useState<string | null>(null);
   // Two independent signals on two channels (see palette.ts): the outline says
   // WHAT KIND of thing this is, the icon says WHICH AGENT produced it.
   const kindColor = nodeKindColorVar(data.nodeType, data.raw.attrs);
@@ -68,6 +72,47 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
           {statusColor && (
             <span className="case-node__status-dot" style={{ background: statusColor }} title={data.confirmationSignal} />
           )}
+        </div>
+      )}
+      {/* HITL #1. Only on a live proposal the surgeon has not yet answered —
+          an escalation has no plan to acknowledge, and a resolved one shows
+          its outcome instead of offering the choice again. */}
+      {data.nodeType === "corrective_trajectory" && !data.raw.attrs.escalated && (
+        <div className="case-node__hitl nodrag nopan">
+          {data.acknowledgmentOutcome ? (
+            <span className={`case-node__hitl-state case-node__hitl-state--${data.acknowledgmentOutcome}`}>
+              {data.acknowledgmentOutcome === "acknowledged" ? "✓ acknowledged — alerts silenced" : "✕ dismissed"}
+            </span>
+          ) : (
+            <>
+              {(["acknowledged", "dismissed"] as const).map((outcome) => (
+                <button
+                  key={outcome}
+                  className="case-node__hitl-button"
+                  disabled={hitlBusy}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setHitlBusy(true);
+                    setHitlError(null);
+                    try {
+                      await acknowledgeProposal(data.raw.node_id, outcome);
+                      // No optimistic update: the SSE stream delivers the real
+                      // state once the write lands. Showing it as done before
+                      // the server agreed would tell the surgeon their action
+                      // took effect when it might not have.
+                    } catch (err) {
+                      setHitlError(err instanceof Error ? err.message : "failed");
+                    } finally {
+                      setHitlBusy(false);
+                    }
+                  }}
+                >
+                  {outcome === "acknowledged" ? "Acknowledge" : "Dismiss"}
+                </button>
+              ))}
+            </>
+          )}
+          {hitlError && <span className="case-node__hitl-error">{hitlError}</span>}
         </div>
       )}
       <Handle type="source" position={Position.Right} style={{ background: kindColor }} />

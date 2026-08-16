@@ -19,11 +19,18 @@ import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import firestore
+from typing import Literal
+
 from pydantic import BaseModel
 
+from agents.hitl.acknowledgment import (
+    NotAProposal,
+    ProposalNotFound,
+    record_acknowledgment,
+)
 from agents.orchestrator.agent import open_case
 
 load_dotenv()
@@ -85,3 +92,29 @@ async def post_open_case(payload: OpenCaseRequest, background_tasks: BackgroundT
     background_tasks.add_task(open_case, case_id, payload.video_id)
 
     return OpenCaseResponse(case_id=case_id)
+
+
+class HitlAcknowledgmentRequest(BaseModel):
+    proposal_node_id: str
+    outcome: Literal["acknowledged", "dismissed"]
+
+
+@app.post("/cases/{case_id}/hitl/acknowledgment")
+async def post_hitl_acknowledgment(case_id: str, payload: HitlAcknowledgmentRequest) -> dict:
+    """HITL #1 — the surgeon acknowledging or dismissing a corrective proposal.
+
+    On the orchestrator rather than the state service, which docs §11 names as
+    the sole HITL channel. Interpreting an acknowledgment is surgical domain
+    knowledge, and plan_v2 §4.3 requires the state service to know nothing
+    about surgery — see agents/hitl/acknowledgment.py for the full reasoning.
+
+    Synchronous, unlike case opening: a surgeon tapping acknowledge needs to
+    know it landed, and a background task returning 200 immediately would
+    report success before anything had changed.
+    """
+    try:
+        return await record_acknowledgment(case_id, payload.proposal_node_id, payload.outcome)
+    except ProposalNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except NotAProposal as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None

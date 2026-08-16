@@ -5,6 +5,7 @@ import { StateGraphPanel } from "./components/tiles/StateGraphPanel";
 import { EventInputPanel } from "./components/tiles/EventInputPanel";
 import { RetrievalPanel } from "./components/tiles/RetrievalPanel";
 import { ActionLogPanel } from "./components/tiles/ActionLogPanel";
+import { setActiveCaseId } from "./api/hitl";
 import { useCaseStateStream } from "./graph/useCaseStateStream";
 
 const STATE_SERVICE_URL = import.meta.env.VITE_STATE_SERVICE_URL ?? "http://localhost:8080";
@@ -62,7 +63,12 @@ function App() {
     if (triggering.current || caseId !== null) return; // only the first play triggers a case
     triggering.current = true;
     openCase(VIDEO_ID)
-      .then(setCaseId)
+      .then((id) => {
+        setCaseId(id);
+        // Node-level HITL controls act on whatever case the graph is showing,
+        // so they read the id from here rather than holding their own copy.
+        setActiveCaseId(id);
+      })
       .catch((err) => {
         triggering.current = false; // allow retrying on the next play if this failed
         console.error("failed to open case:", err);

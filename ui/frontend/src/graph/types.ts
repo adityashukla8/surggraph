@@ -94,6 +94,9 @@ export interface CaseGraphNodeData extends Record<string, unknown> {
   confirmationSignal?: ConfirmationSignal;
   /** Error severity band — what actually gates downstream reasoning. */
   severityBand?: string;
+  /** HITL #1 — a corrective proposal's acknowledge/dismiss state. Undefined
+   *  means the surgeon has not engaged with it yet. */
+  acknowledgmentOutcome?: "acknowledged" | "dismissed";
   /** A real record on an external system (a FHIR resource this case actually
    *  wrote). Makes the node clickable through to the third-party server, which
    *  is the difference between claiming an external write happened and being

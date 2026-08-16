@@ -1,7 +1,7 @@
 import dagre from "@dagrejs/dagre";
 import type { CaseFlowNode } from "./nodeTypes";
 import type { CaseFlowEdge } from "./edgeTypes";
-import { measureNodeWidth, NODE_HEIGHT } from "./measureLabel";
+import { measureNodeWidth, NODE_HEIGHT, NODE_HEIGHT_WITH_CONTROLS } from "./measureLabel";
 
 // Auto-layout, left-to-right so the case reads as a timeline — which is also
 // what plan_v2 §4.3's "every node ordered by timestamp" wants visually.
@@ -23,10 +23,17 @@ export function layoutGraph(nodes: CaseFlowNode[], edges: CaseFlowEdge[]): CaseF
   g.setGraph({ rankdir: "LR", nodesep: NODESEP, ranksep: RANKSEP });
 
   const widths = new Map<string, number>();
+  const heights = new Map<string, number>();
   for (const node of nodes) {
     const width = measureNodeWidth(node.data.label);
+    // A live proposal renders an acknowledge/dismiss row and is taller.
+    const height =
+      node.data.nodeType === "corrective_trajectory" && !node.data.raw.attrs.escalated
+        ? NODE_HEIGHT_WITH_CONTROLS
+        : NODE_HEIGHT;
     widths.set(node.id, width);
-    g.setNode(node.id, { width, height: NODE_HEIGHT });
+    heights.set(node.id, height);
+    g.setNode(node.id, { width, height });
   }
   for (const edge of edges) {
     g.setEdge(edge.source, edge.target);

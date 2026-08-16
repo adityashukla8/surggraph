@@ -62,3 +62,8 @@ export function measureNodeWidth(label: string): number {
 
 /** Fixed, per §4.1 — only length varies. */
 export const NODE_HEIGHT = 56;
+
+/** Corrective proposals carry a HITL acknowledge/dismiss row, so they are
+ *  taller than the standard box. dagre must be told, or the control overflows
+ *  into whatever node was laid out beneath it. */
+export const NODE_HEIGHT_WITH_CONTROLS = 78;
