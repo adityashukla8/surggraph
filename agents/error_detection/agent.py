@@ -30,6 +30,18 @@ from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_tim
 
 _COORDINATOR_NODE_ID = "agent:error_detection_coordinator"
 
+# Error Detection deliberately writes NO phase nodes. Its sub-agents reason
+# about error categories, not phase identity, so it has no semantic description
+# of its own to put on a phase label — its previous fallback produced nodes
+# literally labelled "Phase 0 (0:00-0:12)", which plan_v2 §13.4 rules out.
+# Perception owns phase nodes and labels them with a real activity description.
+#
+# The guard that was supposed to prevent the clobber could not work: it looked
+# for an existing `phase:{id}` while Perception writes `phase:{id}:{window}`,
+# so it never matched and Error Detection created a duplicate, meaningless,
+# orphaned node for every phase. Error nodes anchor to the coordinator instead,
+# which is drawn in the static skeleton and always exists.
+
 SUB_AGENT_LABELS = {
     "error_detection_coordinator": "Error Detection Coordinator",
     "error_detection_temporal": "Temporal Agent",
@@ -102,39 +114,6 @@ async def _widen_agent_time_ranges(
         )
 
 
-async def _ensure_phase_node(case_id: str, phase: str, phases_seen: set[str], time_range_label: str) -> None:
-    """Error Detection's own sub-agents reason about error categories, not general
-    phase identity — it has no real semantic description of its own to
-    offer for a phase node's label (unlike Scene Graph Builder's real
-    `activity_description` or Anticipation's own live naming, plan §13.4).
-    So this only ever CREATES the node if nothing better already exists —
-    it must never clobber a real semantic label with the generic
-    `"Phase {id}"` fallback, a real race given Scene Graph Builder/
-    Anticipation run concurrently against the same node_id. One real
-    snapshot read per NEWLY-seen phase (gated by `phases_seen`, so at most
-    a handful of times per video, never per window) — negligible against
-    this agent's own per-window Gemini call volume."""
-    if phase in phases_seen:
-        return
-    phases_seen.add(phase)
-    node_id = f"phase:{phase}"
-    snapshot = await get_state_snapshot(case_id)
-    existing = next((n for n in snapshot.nodes if n.node_id == node_id), None)
-    if existing is not None and existing.source_agent != "error_detection_coordinator":
-        return  # a real semantic label already exists — don't clobber it with the generic fallback
-    await apply_state_patch(
-        case_id,
-        node=GraphNodePatch(
-            node_id=node_id,
-            node_type="phase",
-            label=f"Phase {phase} ({time_range_label})",
-            source_agent="error_detection_coordinator",
-            source_tool="error_detection_case",
-        ),
-        reason=f"Phase {phase} first referenced",
-    )
-
-
 async def error_detection_case(
     case_id: str, video_id: str, start_s: float = 0.0, end_s: float | None = None, window_s: float = DEFAULT_WINDOW_S
 ) -> list[DivergenceEvent]:
@@ -161,17 +140,12 @@ async def error_detection_case(
     fps = find_video_fps(video_id)
     if fps is None:
         raise ValueError(f"no source video found for {video_id!r} — cannot derive real timestamps for the graph")
-    phases_seen: set[str] = set()
     agent_ranges: dict[str, tuple[float, float]] = {}
     events: list[DivergenceEvent] = []
 
     async def on_window_complete(assessment: ErrorDetectionWindowAssessment) -> None:
         phase = phase_at_frame(video_id, assessment.start_frame, segments=segments) or "unknown"
         segment = next((s for s in segments if s.start_frame <= assessment.start_frame <= s.end_frame), None)
-        phase_time_range = (
-            format_video_time_range(segment.start_frame / fps, segment.end_frame / fps) if segment is not None else "time unknown"
-        )
-        await _ensure_phase_node(case_id, phase, phases_seen, phase_time_range)
 
         window_start_s = assessment.start_frame / fps
         window_end_s = assessment.end_frame / fps

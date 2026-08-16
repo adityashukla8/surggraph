@@ -44,10 +44,11 @@ from google.adk.events import Event
 from google.genai import types
 
 from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
+from agents.complication_reasoning import agent as complication_reasoning
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
-from state import node_ids
+from state import event_bus, node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.patient_twin import load_patient_twin, summarize_for_prompt as summarize_patient_twin
 from tools.state_tools import apply_state_patch, apply_state_patches
@@ -258,10 +259,27 @@ async def open_case(
 
     await _draw_static_hierarchy(case_id, start_s, end_s, video_id)
 
-    divergences, _perception_state = await asyncio.gather(
-        error_detection_case(case_id, video_id, start_s=start_s, end_s=end_s),
-        perception_case(case_id, video_id, start_s=start_s, end_s=end_s),
-    )
+    # Register the event-driven agents BEFORE any sweep starts. The bus is the
+    # only thing that wakes them (docs/agentic_workflow.md §7): they do not
+    # poll, so an error node written before a subscription exists is simply
+    # never reasoned about. Subscribing after dispatch would drop exactly the
+    # early errors a fast sweep produces first.
+    bus = event_bus.get_bus(case_id)
+    complication_reasoning.subscribe(bus)
+
+    try:
+        divergences, _perception_state = await asyncio.gather(
+            error_detection_case(case_id, video_id, start_s=start_s, end_s=end_s),
+            perception_case(case_id, video_id, start_s=start_s, end_s=end_s),
+        )
+        # The sweeps are done, but an event-driven handler fired by the last
+        # error may still be mid-flight — a complication reasoning pass is two
+        # Gemini calls and a network fetch. Draining here is what keeps its
+        # output in the case instead of being cancelled on the way out.
+        await bus.drain()
+    finally:
+        await event_bus.close_bus(case_id)
+
     return divergences
 
 
