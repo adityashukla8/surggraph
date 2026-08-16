@@ -125,6 +125,7 @@ export const EDGE_KIND_COLOR: Record<EdgeKind, string> = {
   verification: "var(--series-6)", // fail-closed gate outcome (green)
   outcome: "var(--baseline)", // action_intent -> its real delivery result
   grading: "var(--series-7)", // post-case only, predicted -> ground truth (violet)
+  succession: "var(--text-secondary)", // the chronological spine — present but never loud
 };
 
 export const CONFIRMATION_STATUS_COLOR: Record<string, string> = {

@@ -40,7 +40,8 @@ export type EdgeKind =
   | "grading"
   | "hierarchy"
   | "involved"
-  | "outcome";
+  | "outcome"
+  | "succession";
 
 export type ConfirmationSignal = "pending" | "confirmed" | "refuted";
 

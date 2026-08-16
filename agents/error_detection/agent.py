@@ -28,6 +28,8 @@ from tools.action_labels import load_action_segments, phase_at_frame
 from tools.state_tools import apply_state_patch, get_state_snapshot
 from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_time, format_video_time_range
 
+_COORDINATOR_NODE_ID = "agent:error_detection_coordinator"
+
 SUB_AGENT_LABELS = {
     "error_detection_coordinator": "Error Detection Coordinator",
     "error_detection_temporal": "Temporal Agent",
@@ -187,9 +189,11 @@ async def error_detection_case(
             await apply_state_patch(
                 case_id,
                 edge=GraphEdgePatch(
-                    edge_id=f"edge:{sub.agent_role}-{assessment.window_id}",
+                    # Same fix: point at the coordinator, which really
+                    # exists, rather than a phase id in a format nobody writes.
+                    edge_id=node_ids.edge(f"agent:error_detection_{sub.agent_role}", _COORDINATOR_NODE_ID, "detection"),
                     source_node_id=f"agent:error_detection_{sub.agent_role}",
-                    target_node_id=f"phase:{phase}",
+                    target_node_id=_COORDINATOR_NODE_ID,
                     edge_kind="detection",
                     source_agent=f"error_detection_{sub.agent_role}",
                     source_tool="run_error_detection_window",
@@ -250,8 +254,16 @@ async def error_detection_case(
             await apply_state_patch(
                 case_id,
                 edge=GraphEdgePatch(
-                    edge_id=node_ids.edge(f"phase:{phase}", event_node_id, "detection"),
-                    source_node_id=f"phase:{phase}",
+                    # Anchored to the coordinator that actually detected this,
+                    # NOT to f"phase:{phase}". That id does not exist: the
+                    # opaque phase id here is a bare number, while Perception
+                    # writes phase nodes as phase:{id}:{window}. The edge
+                    # pointed at a node nobody ever wrote, so it was silently
+                    # dropped by the renderer and every error node floated
+                    # disconnected. The coordinator node is drawn in the static
+                    # skeleton before any sweep starts, so it always exists.
+                    edge_id=node_ids.edge(_COORDINATOR_NODE_ID, event_node_id, "detection"),
+                    source_node_id=_COORDINATOR_NODE_ID,
                     target_node_id=event_node_id,
                     edge_kind="detection",
                     source_agent="error_detection_coordinator",

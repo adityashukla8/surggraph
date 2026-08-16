@@ -8,7 +8,7 @@ export type CaseFlowEdge = Edge<CaseGraphEdgeData, "caseEdge">;
 // The two structural kinds that exist in bulk (the case skeleton, and every
 // perception event's link to the entities it involves) are drawn thin and
 // quiet so they never compete with the reasoning chain for attention.
-const STRUCTURAL_KINDS = new Set<CaseGraphEdgeData["edgeKind"]>(["hierarchy", "involved"]);
+const STRUCTURAL_KINDS = new Set<CaseGraphEdgeData["edgeKind"]>(["hierarchy", "involved", "succession"]);
 
 // A confirmed prediction and a fail-closed gate outcome are the two edges a
 // viewer most needs to catch, so they get the heaviest stroke.

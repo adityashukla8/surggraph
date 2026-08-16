@@ -49,8 +49,8 @@ from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
 from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
-from tools.patient_twin import write_patient_twin_node
-from tools.state_tools import apply_state_patch
+from tools.patient_twin import load_patient_twin, summarize_for_prompt as summarize_patient_twin
+from tools.state_tools import apply_state_patch, apply_state_patches
 from tools.video_utils import find_video_duration_s, format_video_time_range
 
 # Real, fixed pipeline structure (not decorative) — Orchestrator dispatches
@@ -101,95 +101,129 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
     replace that, it just guarantees the skeleton doesn't have to wait for
     it."""
     trigger_node_id = node_ids.trigger(case_id)
-    await apply_state_patch(
-        case_id,
-        node=GraphNodePatch(
-            node_id=trigger_node_id,
-            node_type="trigger",
-            label=f"Autonomous workflow triggered ({format_video_time_range(start_s, end_s)})",
-            attrs={"video_id": video_id},
-            source_agent="orchestrator",
-            source_tool="open_case",
-        ),
-        reason="Case opened — user pressed play, autonomous pipeline started",
-        source_agent="orchestrator",
-        source_tool="open_case",
-    )
+    patient_twin_node_id = node_ids.patient_twin()
+    profile = load_patient_twin()
 
-    # The patient twin is part of the static skeleton (docs/plan_v2 §6 step 1),
-    # drawn here rather than fetched mid-case: complication reasoning needs it
-    # in its context slice the moment the first error fires, and by then the
-    # thread pool is saturated with Gemini calls.
-    patient_twin_node_id = await write_patient_twin_node(case_id)
-    await apply_state_patch(
-        case_id,
-        edge=GraphEdgePatch(
-            edge_id=node_ids.edge(trigger_node_id, patient_twin_node_id, "hierarchy"),
-            source_node_id=trigger_node_id,
-            target_node_id=patient_twin_node_id,
-            edge_kind="hierarchy",
-            source_agent="orchestrator",
-            source_tool="open_case",
-            reason="Synthetic patient profile loaded for this case",
-        ),
-        reason="Synthetic patient profile loaded for this case",
-    )
-
-    for target_agent_node_id, target_agent_name, target_agent_label in _TOP_LEVEL_AGENTS:
-        await apply_state_patch(
-            case_id,
-            node=GraphNodePatch(
-                node_id=target_agent_node_id,
-                node_type="agent",
-                label=target_agent_label,
-                source_agent=target_agent_name,
+    patches: list[tuple] = [
+        (
+            GraphNodePatch(
+                node_id=trigger_node_id,
+                node_type="trigger",
+                label=f"Autonomous workflow triggered ({format_video_time_range(start_s, end_s)})",
+                attrs={"video_id": video_id},
+                source_agent="orchestrator",
                 source_tool="open_case",
             ),
-            reason=f"{target_agent_name} registered for this case",
-        )
-        await apply_state_patch(
-            case_id,
-            edge=GraphEdgePatch(
-                edge_id=f"edge:dispatch-{case_id}-{target_agent_name}",
+            None,
+            "Case opened — user pressed play, autonomous pipeline started",
+        ),
+        # The patient twin is part of the static skeleton (docs/plan_v2 §6
+        # step 1): complication reasoning needs it in its context slice the
+        # moment the first error fires, and by then the thread pool is
+        # saturated with Gemini calls.
+        (
+            GraphNodePatch(
+                node_id=patient_twin_node_id,
+                node_type="patient_twin",
+                label=f"{profile['display_name']} (synthetic)",
+                attrs={
+                    "synthetic": True,
+                    "disclosure": profile["_disclosure"],
+                    "profile": profile,
+                    "prompt_summary": summarize_patient_twin(profile),
+                },
+                source_agent="orchestrator",
+                source_tool="open_case",
+            ),
+            None,
+            "Synthetic patient profile loaded for this case",
+        ),
+        (
+            None,
+            GraphEdgePatch(
+                edge_id=node_ids.edge(trigger_node_id, patient_twin_node_id, "hierarchy"),
                 source_node_id=trigger_node_id,
-                target_node_id=target_agent_node_id,
+                target_node_id=patient_twin_node_id,
                 edge_kind="hierarchy",
                 source_agent="orchestrator",
                 source_tool="open_case",
-                reason=f"Orchestrator dispatched {target_agent_name}",
+                reason="Synthetic patient profile loaded for this case",
             ),
-            reason=f"Orchestrator dispatched {target_agent_name}",
-            source_agent="orchestrator",
-            source_tool="open_case",
+            "Synthetic patient profile loaded for this case",
+        ),
+    ]
+
+    for target_agent_node_id, target_agent_name, target_agent_label in _TOP_LEVEL_AGENTS:
+        patches.append(
+            (
+                GraphNodePatch(
+                    node_id=target_agent_node_id,
+                    node_type="agent",
+                    label=target_agent_label,
+                    source_agent=target_agent_name,
+                    source_tool="open_case",
+                ),
+                None,
+                f"{target_agent_name} registered for this case",
+            )
+        )
+        patches.append(
+            (
+                None,
+                GraphEdgePatch(
+                    edge_id=node_ids.edge(trigger_node_id, target_agent_node_id, "hierarchy"),
+                    source_node_id=trigger_node_id,
+                    target_node_id=target_agent_node_id,
+                    edge_kind="hierarchy",
+                    source_agent="orchestrator",
+                    source_tool="open_case",
+                    reason=f"Orchestrator dispatched {target_agent_name}",
+                ),
+                f"Orchestrator dispatched {target_agent_name}",
+            )
         )
 
+    coordinator_node_id = node_ids.agent("error_detection_coordinator")
     for sub_node_id, sub_label in SUB_AGENT_LABELS.items():
         if sub_node_id == "error_detection_coordinator":
             continue
-        await apply_state_patch(
-            case_id,
-            node=GraphNodePatch(
-                node_id=f"agent:{sub_node_id}",
-                node_type="agent",
-                label=sub_label,
-                source_agent=sub_node_id,
-                source_tool="open_case",
-            ),
-            reason=f"{sub_label} registered for this case",
+        sub_agent_node_id = node_ids.agent(sub_node_id)
+        patches.append(
+            (
+                GraphNodePatch(
+                    node_id=sub_agent_node_id,
+                    node_type="agent",
+                    label=sub_label,
+                    source_agent=sub_node_id,
+                    source_tool="open_case",
+                ),
+                None,
+                f"{sub_label} registered for this case",
+            )
         )
-        await apply_state_patch(
-            case_id,
-            edge=GraphEdgePatch(
-                edge_id=f"edge:hierarchy-error_detection_coordinator-{sub_node_id}",
-                source_node_id="agent:error_detection_coordinator",
-                target_node_id=f"agent:{sub_node_id}",
-                edge_kind="hierarchy",
-                source_agent="error_detection_coordinator",
-                source_tool="open_case",
-                reason=f"Error Detection Coordinator owns {sub_label}",
-            ),
-            reason=f"Error Detection Coordinator owns {sub_label}",
+        patches.append(
+            (
+                None,
+                GraphEdgePatch(
+                    edge_id=node_ids.edge(coordinator_node_id, sub_agent_node_id, "hierarchy"),
+                    source_node_id=coordinator_node_id,
+                    target_node_id=sub_agent_node_id,
+                    edge_kind="hierarchy",
+                    source_agent="error_detection_coordinator",
+                    source_tool="open_case",
+                    reason=f"Error Detection Coordinator owns {sub_label}",
+                ),
+                f"Error Detection Coordinator owns {sub_label}",
+            )
         )
+
+    # ONE batched write for the whole skeleton. Previously these went out
+    # individually, and since writes to a case serialize at roughly a second
+    # each, the skeleton trickled onto the screen over ~15 seconds — the very
+    # first thing a viewer sees, arriving slowly. Nodes precede the edges that
+    # reference them in the list, and the store assigns consecutive seqs in
+    # list order, so no edge can land before its endpoints.
+    await apply_state_patches(case_id, patches)
 
 
 async def open_case(

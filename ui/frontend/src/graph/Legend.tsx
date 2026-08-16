@@ -58,6 +58,7 @@ type EdgeRow = { kind: EdgeKind; label: string };
 const EDGE_ROWS: EdgeRow[] = [
   { kind: "hierarchy", label: "Dispatch / hierarchy" },
   { kind: "involved", label: "Event involves entity" },
+  { kind: "succession", label: "Followed in time" },
   { kind: "detection", label: "Detected from perception" },
   { kind: "causal_reasoning", label: "Error → complication" },
   { kind: "evidence", label: "Grounded in literature" },
@@ -72,7 +73,7 @@ const EDGE_ROWS: EdgeRow[] = [
 
 // Mirrors edgeTypes.tsx::edgeStyle exactly, so a change to how edges really
 // render shows up here too rather than leaving the legend quietly wrong.
-const STRUCTURAL: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["hierarchy", "involved"]);
+const STRUCTURAL: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["hierarchy", "involved", "succession"]);
 const EMPHASIZED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["confirmation", "verification"]);
 const DASHED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["prediction", "proposal"]);
 

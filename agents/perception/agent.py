@@ -39,6 +39,7 @@ from agents.perception.writer import (
     SOURCE_AGENT,
     entity_patch,
     event_patches,
+    link,
     phase_patch,
     snapshot_patch,
     write_audit_record,
@@ -120,7 +121,7 @@ async def _perceive_window(video_id: str, window: VideoWindow, slice_context: di
         return await run_llm_agent_once(AGENT, content, PerceptionWindowOutput, app_name="surggraph_perception")
 
 
-async def _emit(case_id: str, pipeline: PerceptionPipeline, decision, obs: WindowObservation, vitals) -> int:
+async def _emit(case_id: str, pipeline: PerceptionPipeline, decision, obs: WindowObservation, vitals, spine: dict) -> int:
     """Applies one window's decision to the graph as a SINGLE batched write.
 
     Batched rather than written one at a time because writes to one case
@@ -136,8 +137,11 @@ async def _emit(case_id: str, pipeline: PerceptionPipeline, decision, obs: Windo
     patches: list[tuple] = [entity_patch(state, _SOURCE_TOOL) for state in decision.entity_updates]
 
     written = 0
+    pending_event_ids: list[str] = []
     for event in decision.events:
-        patches.extend(event_patches(event, pipeline.next_seq(), obs, _SOURCE_TOOL))
+        seq = pipeline.next_seq()
+        patches.extend(event_patches(event, seq, obs, _SOURCE_TOOL))
+        pending_event_ids.append(node_ids.perception_event(seq, event.kind))
         written += 1
 
     active = sorted(pipeline.active_entity_ids())
@@ -162,7 +166,23 @@ async def _emit(case_id: str, pipeline: PerceptionPipeline, decision, obs: Windo
 
     if decision.phase_changed_to is not None:
         label = pipeline.current_activity_text or f"Phase segment from {obs.video_time_s:.0f}s"
+        phase_node_id = node_ids.phase(decision.phase_changed_to, obs.window_index)
         patches.append(phase_patch(decision.phase_changed_to, obs.window_index, label, _SOURCE_TOOL))
+
+        # The chronological spine (§4.3). The first activity hangs off the
+        # agent that perceived it; every later one follows its predecessor, so
+        # the graph reads left-to-right as the case actually unfolded rather
+        # than as a scatter of timestamped nodes.
+        if spine["previous_phase_node_id"] is None:
+            patches.append(
+                link(node_ids.agent(SOURCE_AGENT), phase_node_id, "hierarchy", f"First activity observed: {label}", _SOURCE_TOOL)
+            )
+        else:
+            patches.append(
+                link(spine["previous_phase_node_id"], phase_node_id, "succession", f"Followed by: {label}", _SOURCE_TOOL)
+            )
+        spine["previous_phase_node_id"] = phase_node_id
+
         patches.append(
             snapshot_patch(
                 node_ids.SNAPSHOT_CURRENT_PHASE,
@@ -192,7 +212,18 @@ async def _emit(case_id: str, pipeline: PerceptionPipeline, decision, obs: Windo
     )
     if vitals.deviations or vitals.is_excursion:
         patches.append(vitals_patch(vitals, obs.window_index))
+        # Anchored like any other observation: a physiological deviation is
+        # something that happened DURING an activity, and leaving it floating
+        # would strip exactly the context that makes it interpretable.
+        pending_event_ids.append(node_ids.vitals(obs.window_index))
         written += 1
+
+    # Every event belongs to the activity it happened during. Without this an
+    # event node has no path back to the agent that produced it and renders as
+    # an orphan, which is exactly what the graph is supposed to prevent.
+    anchor = spine["previous_phase_node_id"] or node_ids.agent(SOURCE_AGENT)
+    for event_node_id in pending_event_ids:
+        patches.append(link(anchor, event_node_id, "hierarchy", "Observed during this activity", _SOURCE_TOOL))
 
     await apply_state_patches(case_id, patches)
     return written
@@ -217,6 +248,26 @@ async def perception_case(
 
     case_duration_s = end_s
     windows = generate_nonoverlapping_windows(start_s, end_s, window_s, fps, id_prefix="perception")
+
+    # Carries the tail of the activity chain across windows. A dict rather than
+    # a local so _emit can advance it.
+    spine: dict = {"previous_phase_node_id": None}
+
+    # The four fixed snapshot slots are the agent's live view of the case, so
+    # they hang off it rather than floating. Written once up front — the slots
+    # never change identity, only content.
+    await apply_state_patches(
+        case_id,
+        [
+            link(node_ids.agent(SOURCE_AGENT), slot, "hierarchy", "Live case state", _SOURCE_TOOL)
+            for slot in (
+                node_ids.SNAPSHOT_CURRENT_PHASE,
+                node_ids.SNAPSHOT_CURRENT_ACTIVITY,
+                node_ids.SNAPSHOT_ACTIVE_ENTITY_SET,
+                node_ids.SNAPSHOT_CURRENT_VITALS,
+            )
+        ],
+    )
     try:
         segments = load_action_segments(video_id)
     except FileNotFoundError:
@@ -258,7 +309,7 @@ async def perception_case(
         decision = pipeline.process(obs)
         await write_audit_record(case_id, obs, raw, decision.suppressed)
         vitals = sample_at(window.start_s, case_duration_s)
-        written = await _emit(case_id, pipeline, decision, obs, vitals)
+        written = await _emit(case_id, pipeline, decision, obs, vitals, spine)
 
         if written == 0 and pipeline.heartbeat_due(obs.video_time_s):
             # Steady state has run long enough to be worth proving liveness —

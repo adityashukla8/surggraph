@@ -107,6 +107,25 @@ def event_patches(event: PendingEvent, seq: int, obs: WindowObservation, source_
     return patches
 
 
+def link(source_node_id: str, target_node_id: str, edge_kind: str, reason: str, source_tool: str) -> tuple:
+    """One structural edge. Used to give perception's output a spine: the agent
+    owns the chain, each activity follows the previous one, and each event
+    hangs off the activity it happened during."""
+    return (
+        None,
+        GraphEdgePatch(
+            edge_id=node_ids.edge(source_node_id, target_node_id, edge_kind),
+            source_node_id=source_node_id,
+            target_node_id=target_node_id,
+            edge_kind=edge_kind,
+            source_agent=SOURCE_AGENT,
+            source_tool=source_tool,
+            reason=reason,
+        ),
+        reason,
+    )
+
+
 def snapshot_patch(slot_node_id: str, label: str, attrs: dict[str, Any], source_tool: str) -> tuple:
     return (
         GraphNodePatch(

@@ -87,10 +87,17 @@ EdgeKind = Literal[
     "confirmation",  # predicted node reconciled against realized state
     "verification",  # proposed action -> verification_block outcome
     "grading",  # predicted -> ground truth, post-case only
-    # --- Three more the workflow prose requires but §4.2's table omits ------
-    "hierarchy",  # orchestrator -> agent, coordinator -> sub-agent (§6 step 1's up-front draw)
+    # --- Four more the workflow prose requires but §4.2's table omits -------
+    "hierarchy",  # orchestrator -> agent -> what that agent produced (§6 step 1's up-front draw)
     "involved",  # perception_event -> entity (§7.3: events reference entities, never copy them)
     "outcome",  # action_intent -> action_outcome (§6 steps 10/14)
+    # §4.3 requires every node be tied to and orderable by timestamp. As a
+    # graph relation rather than only a sort key, that is this edge: "this
+    # followed that". It is what turns a pile of timestamped nodes into a
+    # readable chronological spine — the activity at 0s leading to the
+    # activity at 15s leading to the next — instead of a scatter the viewer
+    # has to reassemble mentally.
+    "succession",
 ]
 
 ConfirmationSignal = Literal["pending", "confirmed", "refuted"]
