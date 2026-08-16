@@ -159,6 +159,31 @@ async def _apply_patch_txn(
     return new_seq
 
 
+@firestore.async_transactional
+async def _apply_batch_txn(
+    transaction: AsyncTransaction, case_ref: Any, items: list[tuple[Any, dict[str, Any]]]
+) -> list[int]:
+    """Applies N graph items in ONE transaction, assigning consecutive seqs.
+
+    Real measured reason this exists: every write transactionally bumps a
+    single `seq` field on the case document, so writes to one case serialize at
+    roughly one per second, and eight CONCURRENT writes exhausted the
+    transaction's five attempts and returned 503. Error Detection alone writes
+    five to ten items per window on a five-second cadence, so per-item
+    transactions cannot keep up. Batching turns a window's worth of writes into
+    one round trip and one contention point rather than N of each.
+    """
+    case_snap = await case_ref.get(transaction=transaction)
+    base_seq = _seq_of(case_snap)
+    seqs = []
+    for offset, (item_ref, item_body) in enumerate(items, start=1):
+        seq = base_seq + offset
+        transaction.set(item_ref, {**item_body, "seq": seq})
+        seqs.append(seq)
+    transaction.set(case_ref, {"seq": base_seq + len(items)}, merge=True)
+    return seqs
+
+
 class CaseGraphStore:
     """Interface-compatible with the in-memory version it replaces
     (snapshot/apply_patch/subscribe/unsubscribe) — see module docstring.
@@ -198,6 +223,27 @@ class CaseGraphStore:
 
         return incoming.model_copy(update={"case_id": case_id, "seq": new_seq})
 
+    async def apply_patch_batch(self, case_id: str, incoming: list[StateDiffEvent]) -> list[StateDiffEvent]:
+        """Batch form of apply_patch. Order is preserved: item i gets seq
+        base+i+1, so the SSE stream and any seq-based filtering see exactly the
+        order the caller intended."""
+        if not incoming:
+            return []
+        client = _get_async_client()
+        case_ref = client.collection("cases").document(case_id)
+        items = [
+            (case_ref.collection("graph_items").document(_item_id(event)), _event_to_item_body(event))
+            for event in incoming
+        ]
+
+        transaction = client.transaction()
+        try:
+            seqs = await _apply_batch_txn(transaction, case_ref, items)
+        except ValueError as exc:
+            raise TransactionContentionError(case_id) from exc
+
+        return [e.model_copy(update={"case_id": case_id, "seq": seq}) for e, seq in zip(incoming, seqs)]
+
     async def subscribe(self, case_id: str) -> tuple[asyncio.Queue[StateDiffEvent], Watch]:
         client = _get_async_client()
         case_ref = client.collection("cases").document(case_id)
@@ -235,3 +281,30 @@ class CaseGraphStore:
 
 
 store = CaseGraphStore()
+
+
+# --- Perception audit log (docs/plan_v2 §7.9) -------------------------------
+# A SEPARATE subcollection from graph_items, on purpose. This holds every raw
+# per-window perception output verbatim, including the redundant ones the
+# change-diff layer correctly declined to promote to events. It is never
+# rendered on the graph, never streamed to the UI, and never read in a live
+# decision path — it exists for post-hoc analysis, benchmark alignment, and
+# debugging the debounce rules against what the model actually said.
+#
+# Keeping it out of graph_items is what makes the separation real rather than
+# stated: the SSE stream and every snapshot() call read graph_items only, so
+# audit volume cannot leak into the reasoning surface no matter how large it
+# grows.
+
+
+async def write_perception_audit(case_id: str, window_index: int, record: dict[str, Any]) -> None:
+    """One document per window, keyed by window_index so a retried window
+    overwrites rather than duplicating."""
+    client = _get_async_client()
+    doc_ref = (
+        client.collection("cases")
+        .document(case_id)
+        .collection("perception_raw")
+        .document(str(window_index))
+    )
+    await doc_ref.set(record)

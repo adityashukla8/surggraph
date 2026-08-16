@@ -113,8 +113,11 @@ def manual_event(uid: str) -> str:
 # --- Reasoning chain -------------------------------------------------------
 
 
-def error(window_index: int, category: str) -> str:
-    return f"error:{window_index}:{category}"
+def error(window: str | int, category: str) -> str:
+    """`window` is the coordinator's real window_id (or a plain index). Keying
+    by window+category rather than a per-event uuid means a re-detection of the
+    same real error updates one node instead of creating a duplicate."""
+    return f"error:{window}:{category}"
 
 
 def complication(root_error_id: str, name: str) -> str:

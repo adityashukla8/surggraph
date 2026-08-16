@@ -324,20 +324,50 @@ class PerceptionPipeline:
         if not normalized:
             return None, None, suppressed
 
+        # Establishing the first activity is not a "change" — nothing to
+        # debounce against, and holding it back would leave the graph with no
+        # activity at all for the opening windows.
+        if self.current_activity_normalized is None:
+            self.current_activity_normalized = normalized
+            self.current_activity_text = obs.activity_description
+            self._last_activity_change_s = obs.video_time_s
+            self._pending_activity = None
+            return (
+                PendingEvent(
+                    kind="activity_changed",
+                    label=obs.activity_description,
+                    detail={"previous": None, "normalized": normalized, "initial": True},
+                ),
+                obs.activity_description,
+                suppressed,
+            )
+
         if normalized == self.current_activity_normalized:
-            self._pending_activity = None  # candidate abandoned; we're back to the established activity
+            self._pending_activity = None  # back to the established activity; candidate abandoned
             return None, None, suppressed
 
-        # A different description. Hold it until it persists — a one-window
-        # wobble between two phrasings is model variance, not a real change.
-        if self._pending_activity and self._pending_activity[0] == normalized:
-            held = self._pending_activity[2] + 1
-        else:
-            held = 1
+        # What has to persist is the DEPARTURE from the established activity,
+        # not one exact wording repeated.
+        #
+        # Real finding from a live 6-window sweep: requiring the same
+        # normalized string twice never fires at all. The model does not repeat
+        # itself when an activity is stable — it describes each window's
+        # specific moment, so three consecutive windows of the same suturing
+        # activity came back as "manipulating suture needle with needle
+        # drivers", "suturing and retracting tissue near the prostate", and
+        # "passing suture needle between needle drivers". All different
+        # strings, all the same activity. Under the exact-match reading the
+        # candidate reset every window and `current_activity` stayed None for
+        # the whole sweep, which is a worse failure than the flicker the rule
+        # exists to prevent.
+        #
+        # So: count consecutive windows that differ from what is established,
+        # and once the departure has held, adopt the most recent description.
+        held = self._pending_activity[2] + 1 if self._pending_activity else 1
         self._pending_activity = (normalized, obs.activity_description, held)
 
         if held < ACTIVITY_PERSIST_WINDOWS:
-            suppressed.append(f"activity_changed held: {held}/{ACTIVITY_PERSIST_WINDOWS} windows")
+            suppressed.append(f"activity_changed held: departure persisted {held}/{ACTIVITY_PERSIST_WINDOWS} windows")
             return None, None, suppressed
 
         # Rate ceiling: at most one activity change per interval. A genuine
@@ -347,6 +377,9 @@ class PerceptionPipeline:
             self._last_activity_change_s is not None
             and obs.video_time_s - self._last_activity_change_s < ACTIVITY_CHANGE_MIN_INTERVAL_S
         ):
+            # Held, not dropped: the candidate stays pending and fires as soon
+            # as the ceiling clears, so a genuine second change inside the
+            # interval is delayed rather than lost.
             suppressed.append(
                 f"activity_changed rate-limited: {obs.video_time_s - self._last_activity_change_s:.0f}s "
                 f"< {ACTIVITY_CHANGE_MIN_INTERVAL_S:.0f}s since last change"

@@ -143,4 +143,4 @@ def test_orchestrator_agent_can_be_constructed_more_than_once():
         # roster has no card for it, so it is not dispatched. Its code still
         # exists under agents/anticipation/; this asserts the roster, not that
         # the module was deleted.
-        assert {s.name for s in agent.sub_agents} == {"error_detection_coordinator", "scene_graph_builder"}
+        assert {s.name for s in agent.sub_agents} == {"error_detection_coordinator", "perception"}

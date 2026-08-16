@@ -15,13 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import logging
 import os
 from pathlib import Path
 
+import httpx
 import requests
 
 from state import event_bus
 from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent, StateSnapshot
+
+logger = logging.getLogger(__name__)
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 RUNTIME_DIR = DATA_ROOT / "runtime"
@@ -39,6 +43,104 @@ def _local_fallback_path(case_id: str) -> Path:
 
 
 _HTTP_TIMEOUT_S = 30
+
+# One shared async client, lazily created on the running loop.
+#
+# Real measured problem this fixes: writes went out via `requests.post` wrapped
+# in `asyncio.to_thread`, which uses Python's DEFAULT thread pool — the same
+# pool the Gemini SDK's blocking I/O draws from. Once dozens of concurrent
+# Gemini calls are in flight, a cheap graph write queues behind them and can be
+# delayed by minutes; that is the documented cause of the static hierarchy
+# arriving ~3 minutes late, and why _draw_static_hierarchy exists at all. An
+# async HTTP client never touches the thread pool, so writes stay fast no
+# matter how saturated it gets.
+#
+# Keyed by event loop, not a bare module global: httpx clients bind to the loop
+# that created them, and this module is imported by tests and scripts that each
+# run their own asyncio.run().
+_async_clients: dict[object, httpx.AsyncClient] = {}
+
+
+def _get_async_client() -> httpx.AsyncClient:
+    loop = asyncio.get_running_loop()
+    client = _async_clients.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S)
+        _async_clients[loop] = client
+    return client
+
+
+# --- Write serialization + retry -------------------------------------------
+# Real measured failure this fixes: eight CONCURRENT writes to the same case
+# returned HTTP 503. Every write transactionally increments a single `seq`
+# field on one case document (services/state_service/store.py), so concurrent
+# writers contend on that one document and some lose all five transaction
+# attempts. The docs' concurrency model has Perception, Error Detection's
+# per-window fan-out, and six event-driven agents all writing one case at once,
+# so this is not an edge case — it is the normal operating condition.
+#
+# Two layers:
+#   1. A per-case asyncio.Lock, so a single process never contends with
+#      ITSELF. Since one case is owned by one orchestrator task, this removes
+#      essentially all of the contention.
+#   2. Retry with backoff on 503, for whatever contention remains (another
+#      process, another instance). Specified in docs/agentic_workflow.md §9.
+#
+# The remaining cost is throughput, not correctness: writes to one case
+# serialize at roughly one per second. See the module docstring note.
+_case_write_locks: dict[tuple[object, str], asyncio.Lock] = {}
+
+_RETRY_BACKOFF_S = (0.5, 1.5, 4.0)
+
+
+def _get_case_lock(case_id: str) -> asyncio.Lock:
+    key = (asyncio.get_running_loop(), case_id)
+    lock = _case_write_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _case_write_locks[key] = lock
+    return lock
+
+
+async def _post_patch_async(state_service_url: str, case_id: str, event: StateDiffEvent) -> StateDiffEvent:
+    client = _get_async_client()
+    url = f"{state_service_url}/state/{case_id}/patch"
+    payload = event.model_dump(mode="json")
+
+    async with _get_case_lock(case_id):
+        last_error: Exception | None = None
+        for attempt, backoff in enumerate((*_RETRY_BACKOFF_S, None)):
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 503:
+                resp.raise_for_status()
+                # The server's response is authoritative (real seq assigned
+                # there) — returning our own pre-request copy would silently
+                # misreport it.
+                return StateDiffEvent.model_validate(resp.json())
+
+            # 503 means transaction contention specifically, which is
+            # retryable. Any other error is not, and is raised above.
+            last_error = httpx.HTTPStatusError(
+                f"state service returned 503 for case {case_id} (transaction contention)",
+                request=resp.request,
+                response=resp,
+            )
+            if backoff is None:
+                break
+            logger.warning(
+                "state write contended for %s (attempt %d), retrying in %.1fs", case_id, attempt + 1, backoff
+            )
+            await asyncio.sleep(backoff)
+
+        assert last_error is not None
+        raise last_error
+
+
+async def _get_snapshot_async(state_service_url: str, case_id: str) -> StateSnapshot:
+    client = _get_async_client()
+    resp = await client.get(f"{state_service_url}/state/{case_id}/snapshot")
+    resp.raise_for_status()
+    return StateSnapshot.model_validate(resp.json())
 # Real finding (Anticipation Agent's end-to-end test, once it became a
 # third concurrent writer alongside Monitor's own 21-call/window fan-out):
 # every write to the same case_id serializes through one Firestore
@@ -106,8 +208,11 @@ async def apply_state_patch(
     )
 
     if state_service_url:
-        committed = await asyncio.to_thread(_post_patch_sync, state_service_url, case_id, event)
+        committed = await _post_patch_async(state_service_url, case_id, event)
     else:
+        # The local-file fallback is genuinely blocking file I/O, so it still
+        # goes to a thread — but it is only ever used when no state service is
+        # configured, i.e. scripts and tests, never under real concurrency.
         committed = await asyncio.to_thread(_write_local_fallback_sync, case_id, event)
 
     # Publish AFTER the write commits, so an event-driven agent reading the
@@ -117,6 +222,53 @@ async def apply_state_patch(
     # must not block behind whatever multi-second reasoning it kicks off.
     # No-op in a process with no subscribers (scripts, tests).
     event_bus.publish(case_id, committed)
+    return committed
+
+
+async def apply_state_patches(case_id: str, patches: list[tuple[GraphNodePatch | None, GraphEdgePatch | None, str]]) -> list[StateDiffEvent]:
+    """Batch form of apply_state_patch — one round trip, one transaction.
+
+    Use this wherever a caller already has several writes in hand (a perception
+    window's entity updates, an error-detection window's sub-agent edges).
+    Single writes to one case serialize at roughly a second each, so a window
+    that emits ten of them individually costs ten seconds against a five-second
+    cadence; batched, it costs one round trip.
+
+    Order is preserved end to end: the store assigns consecutive seq values in
+    list order, so the SSE stream sees exactly the intended order.
+    """
+    if not patches:
+        return []
+
+    events = [
+        StateDiffEvent(
+            case_id=case_id,
+            seq=0,  # the store is the sole authority; this is a placeholder
+            op="add_node" if node is not None else "add_edge",
+            node=node,
+            edge=edge,
+            reason=reason,
+            source_agent=(node.source_agent if node else edge.source_agent),
+            source_tool=(node.source_tool if node else edge.source_tool),
+        )
+        for node, edge, reason in patches
+    ]
+
+    state_service_url = os.environ.get("STATE_SERVICE_URL")
+    if state_service_url:
+        client = _get_async_client()
+        async with _get_case_lock(case_id):
+            resp = await client.post(
+                f"{state_service_url}/state/{case_id}/patch/batch",
+                json=[e.model_dump(mode="json") for e in events],
+            )
+            resp.raise_for_status()
+            committed = [StateDiffEvent.model_validate(item) for item in resp.json()]
+    else:
+        committed = [await asyncio.to_thread(_write_local_fallback_sync, case_id, e) for e in events]
+
+    for event in committed:
+        event_bus.publish(case_id, event)
     return committed
 
 
@@ -163,5 +315,5 @@ async def get_state_snapshot(case_id: str) -> StateSnapshot:
     service when STATE_SERVICE_URL is set, local JSONL replay otherwise."""
     state_service_url = os.environ.get("STATE_SERVICE_URL")
     if state_service_url:
-        return await asyncio.to_thread(_get_snapshot_sync, state_service_url, case_id)
+        return await _get_snapshot_async(state_service_url, case_id)
     return await asyncio.to_thread(_read_local_fallback_snapshot_sync, case_id)

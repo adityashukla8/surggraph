@@ -84,6 +84,19 @@ async def post_patch(case_id: str, incoming: StateDiffEvent) -> StateDiffEvent:
         raise HTTPException(status_code=503, detail="transaction contention, retry") from None
 
 
+@app.post("/state/{case_id}/patch/batch", response_model=list[StateDiffEvent])
+async def post_patch_batch(case_id: str, incoming: list[StateDiffEvent]) -> list[StateDiffEvent]:
+    """N graph items in one transaction. Same contention semantics as the
+    single-item endpoint, but one contention point per batch instead of N."""
+    for event in incoming:
+        if event.node is None and event.edge is None:
+            raise HTTPException(status_code=400, detail="every patch requires a node or an edge")
+    try:
+        return await store.apply_patch_batch(case_id, incoming)
+    except TransactionContentionError:
+        raise HTTPException(status_code=503, detail="transaction contention, retry") from None
+
+
 @app.get("/state/{case_id}/stream")
 async def stream(case_id: str, request: Request) -> EventSourceResponse:
     queue, watch = await store.subscribe(case_id)

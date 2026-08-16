@@ -20,6 +20,9 @@ actually processed) — not just phase/event nodes as before.
 from __future__ import annotations
 
 from agents.error_detection.coordinator import ErrorDetectionWindowAssessment, build_divergence_events, run_error_detection_sweep
+from agents.error_detection.aggregation import DEFAULT_THRESHOLD
+from agents.error_detection.severity import assess
+from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.action_labels import load_action_segments, phase_at_frame
 from tools.state_tools import apply_state_patch, get_state_snapshot
@@ -205,17 +208,39 @@ async def error_detection_case(
             # anchors the event to, converted to the video's own real time
             # via the real fps (never assumed/hardcoded).
             video_time_s = divergence.frame / fps
-            event_node_id = f"error:{divergence.event_id}"
+
+            # Keyed by window and category, not by the event's own uuid — the
+            # same real error re-detected on a retry must land on the SAME node
+            # rather than a second one that looks like a second error.
+            event_node_id = node_ids.error(divergence.window_id, divergence.error_category)
+
+            # Severity is what Complication Reasoning filters on. Confidence
+            # alone will not do: a detector can be certain about a trivial
+            # error and unsure about a dangerous one.
+            score, band = assess(
+                divergence.error_category,
+                divergence.composite_score or 0.0,
+                divergence.threshold_used or DEFAULT_THRESHOLD,
+            )
+
+            readable = divergence.error_category.replace("_", " ")
             await apply_state_patch(
                 case_id,
                 node=GraphNodePatch(
                     node_id=event_node_id,
                     node_type="error",
-                    label=f"Divergence: {divergence.error_category} at {format_video_time(video_time_s)}",
+                    label=f"{readable} at {format_video_time(video_time_s)}",
                     attrs={
+                        "error_category": divergence.error_category,
+                        "severity": score,
+                        "severity_band": band,
                         "confidence": divergence.confidence,
                         "composite_score": divergence.composite_score,
+                        "threshold_used": divergence.threshold_used,
+                        "psi": divergence.psi,
+                        "window_id": divergence.window_id,
                         "video_time_s": round(video_time_s, 1),
+                        "reasoning": divergence.reasoning_trace,
                     },
                     source_agent="error_detection_coordinator",
                     source_tool="error_detection_case",
@@ -225,7 +250,7 @@ async def error_detection_case(
             await apply_state_patch(
                 case_id,
                 edge=GraphEdgePatch(
-                    edge_id=f"edge:{divergence.event_id}",
+                    edge_id=node_ids.edge(f"phase:{phase}", event_node_id, "detection"),
                     source_node_id=f"phase:{phase}",
                     target_node_id=event_node_id,
                     edge_kind="detection",

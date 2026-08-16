@@ -45,8 +45,8 @@ from google.genai import types
 
 from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
-from agents.scene_graph_builder.agent import scene_graph_case
-from agents.scene_graph_builder.subagent import build_subagent as build_scene_graph_subagent
+from agents.perception.agent import perception_case
+from agents.perception.subagent import build_subagent as build_perception_subagent
 from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.patient_twin import write_patient_twin_node
@@ -68,7 +68,7 @@ from tools.video_utils import find_video_duration_s, format_video_time_range
 # anticipation next-phase accuracy in the Benchmark Agent.
 _TOP_LEVEL_AGENTS = (
     ("agent:error_detection_coordinator", "error_detection_coordinator", "Error Detection Coordinator"),
-    ("agent:scene_graph_builder", "scene_graph_builder", "Scene Graph Builder"),
+    ("agent:perception", "perception", "Perception Agent"),
 )
 
 logger = logging.getLogger(__name__)
@@ -198,8 +198,8 @@ async def open_case(
     """Orchestrator's actual work for opening a case: emits a real
     "workflow triggered" node (the honest marker of the moment the user
     pressed play — not fabricated, not a fake progress indicator), then
-    runs Error Detection's live detection and Scene Graph Builder's live
-    entity/relation extraction over `video_id`, concurrently. `start_s`/`end_s`
+    runs Error Detection's live detection and Perception's live
+    entity/relation/activity sweep over `video_id`, concurrently. `start_s`/`end_s`
     default to the video's own real full duration
     (docs/latency_optimization.md: "entire video's inference", not one
     bounded demo window) — `find_video_duration_s` reads this from the
@@ -217,9 +217,9 @@ async def open_case(
 
     await _draw_static_hierarchy(case_id, start_s, end_s, video_id)
 
-    divergences, _scene_graph_outputs = await asyncio.gather(
+    divergences, _perception_state = await asyncio.gather(
         error_detection_case(case_id, video_id, start_s=start_s, end_s=end_s),
-        scene_graph_case(case_id, video_id, start_s=start_s, end_s=end_s),
+        perception_case(case_id, video_id, start_s=start_s, end_s=end_s),
     )
     return divergences
 
@@ -244,7 +244,7 @@ class OrchestratorAgent(BaseAgent):
         # configuration, not Python object identity.
         super().__init__(
             name=name,
-            sub_agents=[ErrorDetectionCoordinatorAgent(), build_scene_graph_subagent()],
+            sub_agents=[ErrorDetectionCoordinatorAgent(), build_perception_subagent()],
         )
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:

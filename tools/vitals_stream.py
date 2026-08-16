@@ -276,6 +276,22 @@ def sample_at(t_s: float, case_duration_s: float) -> VitalsSample:
     )
 
 
+def vitals_patch(sample: VitalsSample, window_index: int) -> tuple:
+    """Patch form, for batching into a perception window's single write."""
+    return (
+        GraphNodePatch(
+            node_id=node_ids.vitals(window_index),
+            node_type="vitals",
+            label=f"{sample.excursion_label or 'Vitals deviation'} (synthetic)",
+            attrs={"synthetic": True, **sample.to_dict()},
+            source_agent="vitals_stream",
+            source_tool="write_vitals_node",
+        ),
+        None,
+        sample.summarize_for_prompt(),
+    )
+
+
 async def write_vitals_node(case_id: str, sample: VitalsSample, window_index: int) -> str:
     """Writes a physiological-state node.
 
