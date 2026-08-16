@@ -69,6 +69,13 @@ from tools.video_utils import find_video_duration_s, format_video_time_range
 _TOP_LEVEL_AGENTS = (
     ("agent:error_detection_coordinator", "error_detection_coordinator", "Error Detection Coordinator"),
     ("agent:perception", "perception", "Perception Agent"),
+    # Event-driven, not swept: these do not run on a cadence, they wake when a
+    # qualifying node lands on the graph. They are still drawn in the static
+    # skeleton so their output has somewhere to hang from the moment it exists
+    # — an agent node created lazily on first use leaves everything it produced
+    # unreachable from the trigger until then.
+    ("agent:complication_reasoning", "complication_reasoning", "Complication Reasoning"),
+    ("agent:literature_retrieval", "literature_retrieval", "Literature Retrieval"),
 )
 
 logger = logging.getLogger(__name__)

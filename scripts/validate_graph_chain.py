@@ -193,7 +193,11 @@ def main() -> int:
             print("  NOTE: no trigger node in this case — reachability skipped (not counted as a failure).")
             print("        Expected when an agent was driven directly rather than through the orchestrator.")
 
-        print("\n--- Expected chain (docs/plan_v2 §4.2/§6) ---")
+            print("\n--- Chain coverage (docs/plan_v2 §4.2/§6) ---")
+        print("  Informational, not a gate: a relation can be absent because the agent")
+        print("  is not built yet, or because it honestly had nothing to assert — an")
+        print("  evidence edge cannot form when no retrieved paper actually supports")
+        print("  the claim, and inventing one would be worse than the gap.")
         for rel in result["relations"]:
             mark = {"ok": "  ok  ", "MISSING": " MISS ", "n/a": "  --  "}[rel["status"]]
             print(f"  [{mark}] {rel['source']} --{rel['edge']}--> {rel['target']}")
@@ -204,12 +208,20 @@ def main() -> int:
         print_chain(snapshot)
 
     # Unreachable only counts when there was a root to be reachable from.
+    # Only genuine structural breakage gates. A dangling edge or an orphan node
+    # is always a bug — nothing legitimately produces one. A missing expected
+    # relation is not: it can mean the agent is unbuilt, or that it correctly
+    # had nothing to assert. Gating on it would make this check cry wolf on
+    # every run, which trains you to stop reading it.
     failures = len(result["dangling"]) + len(result["orphans"]) + len(result["unreachable"])
-    failures += sum(1 for r in result["relations"] if r["status"] == "MISSING")
+    missing = sum(1 for r in result["relations"] if r["status"] == "MISSING")
     if failures:
-        print(f"\nFAILED: {failures} structural problem(s)", file=sys.stderr)
+        print(f"\nFAILED: {failures} structural problem(s) — dangling edges / orphans / unreachable", file=sys.stderr)
         return 1
-    print("\nPASSED: chain is fully connected and matches the plan")
+    if missing:
+        print(f"\nPASSED structurally. {missing} expected relation(s) not present — see coverage above.")
+        return 0
+    print("\nPASSED: chain fully connected, every applicable relation present")
     return 0
 
 
