@@ -1,14 +1,52 @@
-// Mirrors state/schema.py's GraphNodePatch / GraphEdgePatch / StateDiffEvent.
-// Keep these two files in sync by hand for now (small enough surface);
-// revisit generating one from the other if the schema keeps changing.
+// Mirrors state/schema.py's Living Graph vocabulary (NodeType, EdgeKind) and
+// its GraphNodePatch / GraphEdgePatch / StateDiffEvent shapes. Kept in sync by
+// hand — the Python side is authoritative; see docs/plan_v2_autonomous_safety_system.md §4.
 
-export type NodeEntityType = "agent" | "phase" | "entity" | "artifact" | "event";
+export type NodeType =
+  // Structural — the case skeleton, drawn up front at case open
+  | "trigger"
+  | "agent"
+  | "patient_twin"
+  // Perception — the two-tier registry + event stream (plan_v2 §7)
+  | "entity"
+  | "perception_event"
+  | "snapshot"
+  | "phase"
+  | "vitals"
+  | "manual_event"
+  // Reasoning chain
+  | "error"
+  | "complication"
+  | "literature_evidence"
+  | "corrective_trajectory"
+  | "divergence_alert"
+  // Action + safety
+  | "action_intent"
+  | "verification_block"
+  | "action_outcome"
+  // Post-case
+  | "benchmark"
+  | "documentation";
+
+export type EdgeKind =
+  | "detection"
+  | "causal_reasoning"
+  | "evidence"
+  | "prediction"
+  | "proposal"
+  | "trajectory_comparison"
+  | "confirmation"
+  | "verification"
+  | "grading"
+  | "hierarchy"
+  | "involved"
+  | "outcome";
+
 export type ConfirmationSignal = "pending" | "confirmed" | "refuted";
-export type EdgeKind = "predicted" | "action" | "observed" | "revised";
 
 export interface GraphNodePatch {
   node_id: string;
-  node_type: NodeEntityType;
+  node_type: NodeType;
   label: string;
   attrs: Record<string, unknown>;
   source_agent: string;
@@ -45,7 +83,7 @@ export interface StateDiffEvent {
 }
 
 export interface CaseGraphNodeData extends Record<string, unknown> {
-  entityType: NodeEntityType;
+  nodeType: NodeType;
   label: string;
   sourceAgent: string;
   sourceTool: string;
@@ -53,6 +91,9 @@ export interface CaseGraphNodeData extends Record<string, unknown> {
   confidence?: number;
   predicted?: boolean;
   confirmationSignal?: ConfirmationSignal;
+  /** Real rendered width in px, measured and assigned by layoutGraph so the
+   *  node renders at exactly the size dagre reserved for it (plan_v2 §4.1). */
+  width?: number;
   raw: GraphNodePatch;
 }
 

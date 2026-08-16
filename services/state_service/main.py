@@ -28,6 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from services.state_service import gcs_video
 from services.state_service.store import TransactionContentionError, store
+from state import node_ids
 from state.schema import GraphNodePatch, StateDiffEvent, StateSnapshot
 
 load_dotenv()
@@ -123,8 +124,8 @@ async def post_manual_event(payload: ManualEventRequest) -> StateDiffEvent:
         raise HTTPException(status_code=400, detail="text must not be empty")
 
     node = GraphNodePatch(
-        node_id=f"event:manual-{uuid.uuid4().hex[:8]}",
-        node_type="event",
+        node_id=node_ids.manual_event(uuid.uuid4().hex[:8]),
+        node_type="manual_event",
         label=f"Manual: {payload.text[:60]}",
         attrs={"text": payload.text},
         source_agent="human",

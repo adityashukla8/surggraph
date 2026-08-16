@@ -10,7 +10,7 @@ Two ways to get video content into a Gemini call:
     (docs/monitor_agent_video_input_benchmark.md: ~2.7x fewer prompt
     tokens and caught a real event still-frame sampling missed, at ~2.9x
     higher per-call latency), but not currently called by any agent as of
-    docs/latency_optimization.md's second pass — Monitor's deep tier and
+    docs/latency_optimization.md's second pass — Error Detection's deep tier and
     Scene Graph Builder both moved to still frames for latency. Left in
     place for a future need, not deleted.
   - `sample_frames`/`frames_to_gemini_parts`/`build_multimodal_content`
@@ -35,7 +35,7 @@ DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
 VIDEO_DIR = DATA_ROOT / "video"
 
 # Single source of truth for the real-time sweep window size, shared by
-# Monitor, Scene Graph Builder, and Anticipation (docs/latency_optimization.md)
+# Error Detection, Scene Graph Builder, and Anticipation (docs/latency_optimization.md)
 # — config-driven rather than hardcoded independently in each agent module,
 # so tuning it can't leave them out of sync with each other. Override via
 # SURGGRAPH_WINDOW_S in .env; 5.0 matches the second latency pass's real,
@@ -112,7 +112,7 @@ def format_video_time(seconds: float) -> str:
     (VideoPanel shows "0:00 / 4:31") — so a time shown on the graph and a
     time shown on the video tile read as the same clock, both derived from
     the real fps, never a hardcoded frame rate. Extracted here once both
-    agents/monitor and agents/scene_graph_builder needed the identical
+    agents/error_detection and agents/scene_graph_builder needed the identical
     formatting — real reuse, not speculative."""
     total = max(0, round(seconds))
     return f"{total // 60}:{total % 60:02d}"
@@ -134,7 +134,7 @@ def generate_nonoverlapping_windows(start_s: float, end_s: float, window_s: floa
     """Simple non-overlapping chunks across [start_s, end_s) — real frame
     boundaries derived from the real fps, never hardcoded frame counts.
     Shared by Scene Graph Builder and Anticipation, whose windowing needs
-    are identical (unlike Monitor's heavy-overlap CARES-style grid, which
+    are identical (unlike Error Detection's heavy-overlap CARES-style grid, which
     stays its own thing in tools/sedmamba_labels.py::generate_windows)."""
     windows: list[VideoWindow] = []
     t = start_s
@@ -247,7 +247,7 @@ def build_video_window_content(
     to [start_s, end_s) via Gemini's own VideoMetadata rather than
     extracting/encoding still frames locally. `fps` controls sampling
     density (valid range (0.0, 24.0], Gemini default 1.0) — see
-    agents/monitor/subagents.py::VIDEO_FPS_PROFILE for the per-role values
+    agents/error_detection/subagents.py::VIDEO_FPS_PROFILE for the per-role values
     chosen after benchmarking (docs/monitor_agent_video_input_benchmark.md).
     `extra_parts`, if given, are appended after the video part — e.g.
     agents/scene_graph_builder's real segmentation-mask image, a second

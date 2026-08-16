@@ -20,6 +20,7 @@ from pathlib import Path
 
 import requests
 
+from state import event_bus
 from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent, StateSnapshot
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
@@ -105,9 +106,18 @@ async def apply_state_patch(
     )
 
     if state_service_url:
-        return await asyncio.to_thread(_post_patch_sync, state_service_url, case_id, event)
+        committed = await asyncio.to_thread(_post_patch_sync, state_service_url, case_id, event)
+    else:
+        committed = await asyncio.to_thread(_write_local_fallback_sync, case_id, event)
 
-    return await asyncio.to_thread(_write_local_fallback_sync, case_id, event)
+    # Publish AFTER the write commits, so an event-driven agent reading the
+    # graph always sees the state that triggered it — publishing first would
+    # race a handler's own snapshot fetch against the write it fired on.
+    # Never awaited (state/event_bus.py::publish spawns tasks): a cheap write
+    # must not block behind whatever multi-second reasoning it kicks off.
+    # No-op in a process with no subscribers (scripts, tests).
+    event_bus.publish(case_id, committed)
+    return committed
 
 
 # --- Read path — Anticipation Agent's get_state_snapshot() tool needs to see

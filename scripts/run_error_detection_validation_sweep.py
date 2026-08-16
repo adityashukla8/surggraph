@@ -1,11 +1,11 @@
-"""Offline validation sweep for the Monitor Agent (plan §3.5 §7): runs the
+"""Offline validation sweep for the Error Detection Agent (plan §3.5 §7): runs the
 real live 2-pass detection pipeline over a range of windows and scores each
 against SEDMamba's real ground truth — never the other way around. This is
 the ONLY place tools/sedmamba_labels.py's ground truth is compared against
-a Monitor decision; agents/monitor/coordinator.py's live decision path never
+a Error Detection decision; agents/error_detection/coordinator.py's live decision path never
 imports it (enforced by tests/test_monitor_agent.py).
 
-Distinct from the live demo path (agents/monitor/agent.py::monitor_case,
+Distinct from the live demo path (agents/error_detection/agent.py::error_detection_case,
 which never touches ground truth and only emits graph patches for whatever
 fires): this script emits NO graph patches, is safe to run repeatedly for
 tuning, and its only output is the validation log + the demo-beat file.
@@ -35,12 +35,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents.monitor.coordinator import run_monitor_window
+from agents.error_detection.coordinator import run_error_detection_window
 from tools.sedmamba_labels import generate_windows, load_error_annotations, log_window_accuracy, window_ground_truth
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data"
-VALIDATION_LOG_PATH = DATA_ROOT / "validation" / "monitor_accuracy.jsonl"
-DEMO_BEAT_PATH = DATA_ROOT / "validation" / "monitor_demo_beat.json"
+VALIDATION_LOG_PATH = DATA_ROOT / "validation" / "error_detection_accuracy.jsonl"
+DEMO_BEAT_PATH = DATA_ROOT / "validation" / "error_detection_demo_beat.json"
 
 
 async def run_sweep(
@@ -65,7 +65,7 @@ async def run_sweep(
         async with semaphore:
             t0 = time.time()
             try:
-                assessment = await run_monitor_window(video_id, window)
+                assessment = await run_error_detection_window(video_id, window)
             except Exception as e:
                 completed += 1
                 print(f"[{completed}/{len(windows)}] {window.window_id} FAILED after {time.time() - t0:.1f}s: {type(e).__name__}: {str(e)[:150]}")

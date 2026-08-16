@@ -1,33 +1,91 @@
-import { NODE_TYPE_ICON, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR, EVENT_NODE_ACCENT, agentColorVar } from "./palette";
+import type { EdgeKind, NodeType } from "./types";
+import { NODE_TYPE_ICON, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR, agentColorVar, nodeKindColorVar, nodeKindOutlineStyle } from "./palette";
 
-// Static reference reflecting the real encoding in nodeTypes.tsx/edgeTypes.tsx/
-// palette.ts — kept as literal entries (not derived from those maps) since
-// the maps themselves don't carry human-readable descriptions, only the
-// raw colors/icons the node/edge components consume. Verified against the
-// real per-kind stroke widths/colors in edgeTypes.tsx::edgeStyle, not
-// guessed — e.g. action is real width 1.5 (thin), observed is real width 3
-// (thick); getting that backwards here would make the legend itself wrong.
-const NODE_ROWS: { icon: string; color: string; label: string }[] = [
-  // Real agent-node color varies per agent (agentColorVar(source_agent)) —
-  // shown here with Anticipation's real color as one concrete example
-  // rather than a color no real node actually uses.
-  { icon: NODE_TYPE_ICON.agent, color: agentColorVar("anticipation"), label: "Agent (color = which agent)" },
-  { icon: NODE_TYPE_ICON.phase, color: "var(--baseline)", label: "Phase / activity" },
-  { icon: NODE_TYPE_ICON.entity, color: "var(--baseline)", label: "Entity (instrument / anatomy)" },
-  { icon: NODE_TYPE_ICON.event, color: EVENT_NODE_ACCENT, label: "Event (divergence)" },
-  { icon: NODE_TYPE_ICON.artifact, color: "var(--baseline)", label: "Artifact (real-world write)" },
+// A factually accurate reference for the real encoding in nodeTypes.tsx /
+// edgeTypes.tsx / palette.ts. Colors, icons, dash patterns and stroke widths
+// are all READ FROM those same modules rather than restated as literals here —
+// a legend that drifts from what the graph actually draws is worse than none,
+// and hand-copied swatches are exactly how that drift happens. Only the
+// human-readable descriptions and the grouping are authored here.
+
+type NodeRow = { kind: NodeType; label: string };
+
+// Grouped by lifecycle stage — eighteen flat rows is a wall of text, and the
+// grouping itself teaches the pipeline's shape.
+const NODE_GROUPS: { heading: string; rows: NodeRow[] }[] = [
+  {
+    heading: "Perception",
+    rows: [
+      { kind: "entity", label: "Entity — instrument / anatomy / material" },
+      { kind: "perception_event", label: "Perception event — something changed" },
+      { kind: "phase", label: "Phase / step" },
+      { kind: "snapshot", label: "Snapshot — what is true right now" },
+      { kind: "vitals", label: "Physiological state" },
+    ],
+  },
+  {
+    heading: "Reasoning",
+    rows: [
+      { kind: "error", label: "Technique error (OCHRA-grounded)" },
+      { kind: "complication", label: "Complication candidate" },
+      { kind: "literature_evidence", label: "Literature evidence" },
+      { kind: "corrective_trajectory", label: "Corrective proposal — what SHOULD happen" },
+      { kind: "divergence_alert", label: "Divergence from the proposed path" },
+    ],
+  },
+  {
+    heading: "Action & safety",
+    rows: [
+      { kind: "action_intent", label: "Proposed external write" },
+      { kind: "verification_block", label: "Fail-closed gate outcome" },
+      { kind: "action_outcome", label: "Real-world write result" },
+    ],
+  },
+  {
+    heading: "Case",
+    rows: [
+      { kind: "agent", label: "Agent — icon color = which agent" },
+      { kind: "patient_twin", label: "Patient profile (synthetic)" },
+      { kind: "manual_event", label: "Human-entered note" },
+      { kind: "benchmark", label: "Post-case scorecard" },
+      { kind: "documentation", label: "Operative note draft" },
+    ],
+  },
 ];
 
-const EDGE_ROWS: { swatch: React.CSSProperties; label: string }[] = [
-  { swatch: { borderTop: `2px solid ${EDGE_KIND_COLOR.action}` }, label: "Action / dispatch" },
-  { swatch: { borderTop: `3px solid ${EDGE_KIND_COLOR.observed}` }, label: "Observed (confirmed real)" },
-  // Real predicted-pending edges are colored by the predicting agent
-  // (edgeTypes.tsx: agentColorVar(sourceAgent)), not a fixed hue —
-  // Anticipation is currently the only real source of these, so its color
-  // is the accurate representative swatch, not an arbitrary choice.
-  { swatch: { borderTop: `2px dashed ${agentColorVar("anticipation")}` }, label: "Predicted — pending (color = predicting agent)" },
-  { swatch: { borderTop: "1.5px dashed var(--text-muted)", opacity: 0.35 }, label: "Predicted — refuted" },
+type EdgeRow = { kind: EdgeKind; label: string };
+
+const EDGE_ROWS: EdgeRow[] = [
+  { kind: "hierarchy", label: "Dispatch / hierarchy" },
+  { kind: "involved", label: "Event involves entity" },
+  { kind: "detection", label: "Detected from perception" },
+  { kind: "causal_reasoning", label: "Error → complication" },
+  { kind: "evidence", label: "Grounded in literature" },
+  { kind: "prediction", label: "Predicted (color = predicting agent)" },
+  { kind: "proposal", label: "Proposed corrective action" },
+  { kind: "trajectory_comparison", label: "Actual vs. proposed" },
+  { kind: "confirmation", label: "Prediction confirmed by reality" },
+  { kind: "verification", label: "Verification outcome" },
+  { kind: "outcome", label: "Write → delivery result" },
+  { kind: "grading", label: "Graded vs. ground truth (post-case)" },
 ];
+
+// Mirrors edgeTypes.tsx::edgeStyle exactly, so a change to how edges really
+// render shows up here too rather than leaving the legend quietly wrong.
+const STRUCTURAL: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["hierarchy", "involved"]);
+const EMPHASIZED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["confirmation", "verification"]);
+const DASHED: ReadonlySet<EdgeKind> = new Set<EdgeKind>(["prediction", "proposal"]);
+
+function edgeSwatch(kind: EdgeKind): React.CSSProperties {
+  const width = STRUCTURAL.has(kind) ? 1 : EMPHASIZED.has(kind) ? 3 : 1.5;
+  // Prediction edges really are per-agent colored, so the swatch shows one
+  // concrete agent's color rather than a hue no real edge ever uses.
+  const color = kind === "prediction" ? agentColorVar("anticipation") : EDGE_KIND_COLOR[kind];
+  return {
+    borderTop: `${width}px ${DASHED.has(kind) ? "dashed" : "solid"} ${color}`,
+    ...(STRUCTURAL.has(kind) ? { opacity: 0.55 } : {}),
+  };
+}
 
 const STATUS_ROWS: { color: string; label: string }[] = [
   { color: CONFIRMATION_STATUS_COLOR.pending, label: "Pending" },
@@ -45,22 +103,32 @@ export function GraphLegend() {
     <details className="graph-legend" open>
       <summary className="graph-legend__toggle">Legend</summary>
       <div className="graph-legend__body">
-        <div className="graph-legend__section">
-          <div className="graph-legend__heading">Nodes</div>
-          {NODE_ROWS.map((row) => (
-            <div className="graph-legend__row" key={row.label}>
-              <span className="graph-legend__icon" style={{ color: row.color }}>
-                {row.icon}
-              </span>
-              <span>{row.label}</span>
-            </div>
-          ))}
-        </div>
+        {NODE_GROUPS.map((group) => (
+          <div className="graph-legend__section" key={group.heading}>
+            <div className="graph-legend__heading">{group.heading}</div>
+            {group.rows.map((row) => (
+              <div className="graph-legend__row" key={row.kind}>
+                {/* Outline = node kind, icon glyph = the kind's shape. Both
+                    read straight from palette.ts, same as the real nodes. */}
+                <span
+                  className="graph-legend__node-swatch"
+                  style={{
+                    borderColor: nodeKindColorVar(row.kind),
+                    borderStyle: nodeKindOutlineStyle(row.kind),
+                  }}
+                >
+                  {NODE_TYPE_ICON[row.kind]}
+                </span>
+                <span>{row.label}</span>
+              </div>
+            ))}
+          </div>
+        ))}
         <div className="graph-legend__section">
           <div className="graph-legend__heading">Edges</div>
           {EDGE_ROWS.map((row) => (
-            <div className="graph-legend__row" key={row.label}>
-              <span className="graph-legend__swatch" style={row.swatch} />
+            <div className="graph-legend__row" key={row.kind}>
+              <span className="graph-legend__swatch" style={edgeSwatch(row.kind)} />
               <span>{row.label}</span>
             </div>
           ))}

@@ -1,4 +1,4 @@
-"""Tests for the Monitor Agent (plan §3.5). Real-data assertions against
+"""Tests for the Error Detection Agent (plan §3.5). Real-data assertions against
 the actual downloaded video_01 pickle/video, matching the style already
 established in test_europepmc_rag.py/test_fhir_write_readback.py — not
 mocked-everything.
@@ -12,8 +12,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from agents.monitor.aggregation import DEFAULT_ALPHA, aggregate, pick_escalation_candidate
-from agents.monitor.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi, route_tier
+from agents.error_detection.aggregation import DEFAULT_ALPHA, aggregate, pick_escalation_candidate
+from agents.error_detection.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi, route_tier
 from tools.sedmamba_labels import derive_sample_rate_hz, generate_windows, load_error_annotations, window_ground_truth
 from tools.video_utils import find_video_path, sample_frames
 
@@ -53,7 +53,7 @@ def test_window_ground_truth_positive_count_matches_real_data():
     assert positive == 231
 
 
-# --- agents/monitor/knowledge.py ---------------------------------------------
+# --- agents/error_detection/knowledge.py ---------------------------------------------
 
 
 def test_knowledge_library_has_six_cares_categories_with_required_fields():
@@ -92,7 +92,7 @@ def test_psi_routing_matches_cares_eq3():
         assert route_tier(psi) in ("resident", "attending", "expert")
 
 
-# --- agents/monitor/aggregation.py -------------------------------------------
+# --- agents/error_detection/aggregation.py -------------------------------------------
 
 
 def test_aggregate_weight_ordering_is_structural_invariant():
@@ -138,8 +138,8 @@ def test_coordinator_never_imports_ground_truth_in_decision_path():
     """Concrete, automatic guard against ever regressing to the rejected
     lookup design: the modules that decide whether a divergence fires must
     not import the validation-only SEDMamba loader."""
-    import agents.monitor.aggregation as aggregation_module
-    import agents.monitor.coordinator as coordinator_module
+    import agents.error_detection.aggregation as aggregation_module
+    import agents.error_detection.coordinator as coordinator_module
 
     for module in (coordinator_module, aggregation_module):
         source_names = set(vars(module).keys())

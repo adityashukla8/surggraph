@@ -22,7 +22,7 @@ Gemini or the UI:
      the prompt, never a category label.
 
 Dead reckoning (docs/latency_optimization.md): runs on the same fixed
-real-time window cadence as Scene Graph Builder, ahead of Monitor/Scene
+real-time window cadence as Scene Graph Builder, ahead of Error Detection/Scene
 Graph Builder's own slower real observations. Convergence: since Gemini's
 predicted next-phase is now free text, not a numeral, matching a
 prediction against a later real observation is done via `_labels_match`
@@ -31,7 +31,7 @@ disclosed limitation, see plan §13.3) rather than node_id equality.
 `_reconcile_pending` polls the live graph (tools/state_tools.get_state_snapshot)
 and, on a match, REDIRECTS the predicted edge's target to the real node an
 independent agent actually wrote — a dashed edge visibly landing on the
-same real node Scene Graph Builder/Monitor populated, not two disconnected
+same real node Scene Graph Builder/Error Detection populated, not two disconnected
 placeholders sitting side by side.
 """
 
@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agents.anticipation.subagent import AnticipationOutput, build_subagent
+from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
 from tools.action_labels import load_action_segments, phase_at_frame
 from tools.adk_runner import run_llm_agent_once
@@ -68,16 +69,16 @@ AGENT = build_subagent()
 
 _GEMINI_CONCURRENCY = asyncio.Semaphore(6)
 
-_WINDOW_S = DEFAULT_WINDOW_S  # shared, config-driven — matches Monitor's/Scene Graph Builder's own real-time cadence
+_WINDOW_S = DEFAULT_WINDOW_S  # shared, config-driven — matches Error Detection's/Scene Graph Builder's own real-time cadence
 _STILL_FRAME_COUNT = 4
 _STILL_RESIZE = (960, 540)
 
 # Real agents whose phase-node writes count as independent corroboration —
 # never "anticipation" itself.
-_REAL_OBSERVING_AGENTS = {"scene_graph_builder", "monitor_coordinator"}
+_REAL_OBSERVING_AGENTS = {"scene_graph_builder", "error_detection_coordinator"}
 
 _RECONCILE_POLL_INTERVAL_S = 5.0
-_RECONCILE_MAX_POLLS = 24  # ~120s bounded wait — Monitor's own sweep is the real long pole anyway
+_RECONCILE_MAX_POLLS = 24  # ~120s bounded wait — Error Detection's own sweep is the real long pole anyway
 
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
 VALIDATION_LOG_PATH = DATA_ROOT / "validation" / "anticipation_accuracy.jsonl"
@@ -204,10 +205,10 @@ async def _write_forecast(case_id: str, source_node_id: str, forecast: Anticipat
 
     if real_match is not None:
         target_node_id = real_match.node_id
-        edge_kind, confirmation_signal = "observed", "confirmed"
+        edge_kind, confirmation_signal = "confirmation", "confirmed"
     else:
-        target_node_id = f"predicted-phase:{_slugify(predicted_label)}"
-        edge_kind, confirmation_signal = "predicted", "pending"
+        target_node_id = node_ids.predicted_phase(predicted_label)
+        edge_kind, confirmation_signal = "prediction", "pending"
         await apply_state_patch(
             case_id,
             node=GraphNodePatch(
@@ -251,7 +252,7 @@ async def _reconcile_pending(case_id: str, pending: list[PendingForecast]) -> No
     """Bounded live-graph poll: on a real independent match, REDIRECTS the
     predicted edge's target to the real node (not just a label restyle) —
     the genuine "converges with the actual branch" visual: the dashed edge
-    ends up pointing at the exact same node Scene Graph Builder/Monitor
+    ends up pointing at the exact same node Scene Graph Builder/Error Detection
     populated. Never resolves to "refuted" — without a matching real
     observation this stays honestly "pending" rather than a live ground-
     truth check masquerading as a live decision."""
@@ -280,7 +281,7 @@ async def _reconcile_pending(case_id: str, pending: list[PendingForecast]) -> No
                 edge=edge.model_copy(
                     update={
                         "target_node_id": match.node_id,
-                        "edge_kind": "observed",
+                        "edge_kind": "confirmation",
                         "confirmation_signal": "confirmed",
                         "timestamp": datetime.now(timezone.utc),
                     }
@@ -299,7 +300,7 @@ async def anticipate_case(
     """Runs the live Anticipation forecast sweep over [start_s, end_s) of
     `video_id`'s real fixed-cadence windows. `async def` — Orchestrator
     awaits this directly on its own shared event loop alongside
-    monitor_case and scene_graph_case, same pattern as those two."""
+    error_detection_case and scene_graph_case, same pattern as those two."""
     await _ensure_agent_node(case_id)
     fps = find_video_fps(video_id)
     if fps is None:

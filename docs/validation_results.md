@@ -37,4 +37,6 @@ Real-data assertions throughout (no mocked-Gemini harness by design — matches 
 
 ## Frontend
 
-No automated test suite yet. `npx tsc --noEmit` (from `ui/frontend/`) for typechecking only — last run clean 2026-08-15.
+No automated test suite yet. Typecheck with **`npx tsc -b`** from `ui/frontend/`.
+
+**Correction, 2026-08-16:** the previously-recorded command here was `npx tsc --noEmit`, which **checks nothing in this project and always exits 0** — `ui/frontend/tsconfig.json` is `{"files": [], "references": [...]}`, so without `-b` tsc resolves zero input files and reports success. Every "typecheck clean" entry recorded before this date was a false signal. Running the correct `tsc -b` immediately surfaced 15 real pre-existing errors. Last run genuinely clean (`tsc -b`, exit 0): 2026-08-16.

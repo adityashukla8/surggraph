@@ -1,7 +1,7 @@
-"""Monitor Agent coordinator (plan §3.5, restructured per docs/latency_optimization.md):
-orchestrates the three real sub-agents (agents/monitor/subagents.py) over a
+"""Error Detection Agent coordinator (plan §3.5, restructured per docs/latency_optimization.md):
+orchestrates the three real sub-agents (agents/error_detection/subagents.py) over a
 sliding window and combines their outputs via deterministic weighted
-aggregation (agents/monitor/aggregation.py) — never a 4th LLM call for the
+aggregation (agents/error_detection/aggregation.py) — never a 4th LLM call for the
 arithmetic.
 
 Latency restructuring, first pass (2026-08-14, full rationale in
@@ -38,7 +38,7 @@ explicit latency-over-accuracy priority.
     latency win on the dimension that mattered (wall clock, and especially
     time-to-first-meaningful-result).
 
-`MonitorCoordinatorAgent` is a `BaseAgent` subclass, not an `LlmAgent` and
+`ErrorDetectionCoordinatorAgent` is a `BaseAgent` subclass, not an `LlmAgent` and
 not `ParallelAgent`. Verified directly against the installed ADK 2.6.3 this
 session:
   - `ParallelAgent` carries a real `@deprecated(...)` decorator ("deprecated
@@ -54,13 +54,13 @@ session:
     of the fixed `sub_agents` list.
 
 The heavy lifting lives in plain async module-level functions
-(`run_monitor_window`, `run_monitor_sweep`) rather than being locked inside
+(`run_error_detection_window`, `run_error_detection_sweep`) rather than being locked inside
 `_run_async_impl` — `scripts/run_monitor_validation_sweep.py` calls
-`run_monitor_sweep` directly as a library function for the full-video
+`run_error_detection_sweep` directly as a library function for the full-video
 offline batch (going through a full ADK InvocationContext per window would
-be pure overhead for that case), while `MonitorCoordinatorAgent._run_async_impl`
+be pure overhead for that case), while `ErrorDetectionCoordinatorAgent._run_async_impl`
 is a thin, genuinely-functional adapter for when Orchestrator invokes
-Monitor through the standard ADK flow during the live demo.
+Error Detection through the standard ADK flow during the live demo.
 """
 
 from __future__ import annotations
@@ -75,12 +75,12 @@ from google.adk.events import Event
 from google.genai import types
 from pydantic import BaseModel
 
-from agents.monitor.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate
-from agents.monitor.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi
-from agents.monitor.subagents import STILL_FRAME_PROFILE, DeepOutput, ScreenOutput, build_subagent
-from state.schema import DivergenceEvent, ErrorCategory, ExpertiseTier, MonitorSubAgentAssessment, SubAgentRole
+from agents.error_detection.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate
+from agents.error_detection.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi
+from agents.error_detection.subagents import STILL_FRAME_PROFILE, DeepOutput, ScreenOutput, build_subagent
+from state.schema import DivergenceEvent, ErrorCategory, ExpertiseTier, ErrorDetectionSubAgentAssessment, SubAgentRole
 from tools.adk_runner import run_llm_agent_once
-from tools.sedmamba_labels import ErrorAnnotations, MonitorWindow, generate_windows, load_error_annotations
+from tools.sedmamba_labels import ErrorAnnotations, ErrorDetectionWindow, generate_windows, load_error_annotations
 from tools.video_utils import DEFAULT_WINDOW_S, build_multimodal_content, find_video_path, sample_frames
 
 _ROLES: list[SubAgentRole] = ["temporal", "spatial", "procedural"]
@@ -89,9 +89,9 @@ _FIXED_DEEP_TIER: ExpertiseTier = "attending"
 
 # Built once — the screen-mode instruction is role-only (not window-
 # specific), so every window's screen pass reuses these same three agents.
-# NOT what MonitorCoordinatorAgent.sub_agents declares — an ADK agent
+# NOT what ErrorDetectionCoordinatorAgent.sub_agents declares — an ADK agent
 # instance can only ever have one parent, permanently (confirmed: a second
-# MonitorCoordinatorAgent() construction raises a real pydantic
+# ErrorDetectionCoordinatorAgent() construction raises a real pydantic
 # ValidationError — "already has a parent agent" — if sub_agents reuses
 # these same singletons). __init__ below builds fresh, identically-
 # configured instances for that declaration instead.
@@ -115,10 +115,10 @@ class CategoryResult(BaseModel):
 
     composite_score: float
     is_divergence: bool
-    assessments: list[MonitorSubAgentAssessment]
+    assessments: list[ErrorDetectionSubAgentAssessment]
 
 
-class MonitorWindowAssessment(BaseModel):
+class ErrorDetectionWindowAssessment(BaseModel):
     """Internal result of running the full pipeline on one window — richer
     than the CaseState-facing DivergenceEvent(s) (only built for categories
     that actually fired; see build_divergence_events).
@@ -134,7 +134,7 @@ class MonitorWindowAssessment(BaseModel):
     window_id: str
     start_frame: int
     end_frame: int
-    sub_agent_assessments: list[MonitorSubAgentAssessment]
+    sub_agent_assessments: list[ErrorDetectionSubAgentAssessment]
     escalated_category: ErrorCategory | None
     psi: int | None
     tier_used: ExpertiseTier | None
@@ -158,10 +158,10 @@ _GEMINI_CONCURRENCY = asyncio.Semaphore(12)
 
 async def _run_agent_once(agent, content: types.Content, output_model: type[BaseModel]) -> BaseModel:
     async with _GEMINI_CONCURRENCY:
-        return await run_llm_agent_once(agent, content, output_model, app_name="surggraph_monitor")
+        return await run_llm_agent_once(agent, content, output_model, app_name="surggraph_error_detection")
 
 
-def _sample_role_frames(video_path: Path, window: MonitorWindow, role: SubAgentRole) -> list:
+def _sample_role_frames(video_path: Path, window: ErrorDetectionWindow, role: SubAgentRole) -> list:
     profile = STILL_FRAME_PROFILE[role]
     return sample_frames(
         video_path,
@@ -172,7 +172,7 @@ def _sample_role_frames(video_path: Path, window: MonitorWindow, role: SubAgentR
     )
 
 
-async def _run_screen_pass_stills(video_path: Path, window: MonitorWindow) -> dict[SubAgentRole, ScreenOutput]:
+async def _run_screen_pass_stills(video_path: Path, window: ErrorDetectionWindow) -> dict[SubAgentRole, ScreenOutput]:
     """Cheap, fast tier — still frames, not native video (docs/latency_optimization.md:
     real ~2.9x per-call latency win, confirmed via docs/monitor_agent_video_input_benchmark.md)."""
 
@@ -189,7 +189,7 @@ async def _run_screen_pass_stills(video_path: Path, window: MonitorWindow) -> di
     return dict(results)
 
 
-async def _run_deep_pass_all_categories(video_path: Path, window: MonitorWindow) -> dict[ErrorCategory, dict[SubAgentRole, DeepOutput]]:
+async def _run_deep_pass_all_categories(video_path: Path, window: ErrorDetectionWindow) -> dict[ErrorCategory, dict[SubAgentRole, DeepOutput]]:
     """Deep tier, UNCONDITIONAL across all 6 categories (not gated on
     screen's escalation choice) at a fixed 'attending' tier — 18 real
     parallel calls per window (3 roles x 6 categories), real added cost,
@@ -219,12 +219,12 @@ async def _run_deep_pass_all_categories(video_path: Path, window: MonitorWindow)
     return by_category
 
 
-async def run_monitor_window(
+async def run_error_detection_window(
     video_id: str,
-    window: MonitorWindow,
+    window: ErrorDetectionWindow,
     alpha_weights: dict[SubAgentRole, float] = DEFAULT_ALPHA,
     threshold: float = DEFAULT_THRESHOLD,
-) -> MonitorWindowAssessment:
+) -> ErrorDetectionWindowAssessment:
     video_path = find_video_path(video_id)
     if video_path is None:
         raise FileNotFoundError(f"no local source video found for {video_id!r}")
@@ -234,7 +234,7 @@ async def run_monitor_window(
     # time is max(screen, deep) instead of screen + deep. Screen's own
     # opinions aren't consumed further here (deep is unconditional now);
     # it still runs because it's the cheap tier that populates the graph
-    # fast, and agents/monitor/agent.py's real-time traceability uses it.
+    # fast, and agents/error_detection/agent.py's real-time traceability uses it.
     _screen_results, deep_by_category = await asyncio.gather(
         _run_screen_pass_stills(video_path, window),
         _run_deep_pass_all_categories(video_path, window),
@@ -248,7 +248,7 @@ async def run_monitor_window(
             o_values["temporal"], o_values["spatial"], o_values["procedural"], alpha=alpha_weights, threshold=threshold
         )
         assessments = [
-            MonitorSubAgentAssessment(
+            ErrorDetectionSubAgentAssessment(
                 agent_role=role,
                 tier_used=_FIXED_DEEP_TIER,
                 error_present=role_outputs[role].error_present,
@@ -267,7 +267,7 @@ async def run_monitor_window(
     top_result = category_results[top_category]
     psi = compute_psi(top_category)  # informational now — no longer gates which tier runs
 
-    return MonitorWindowAssessment(
+    return ErrorDetectionWindowAssessment(
         window_id=window.window_id,
         start_frame=window.start_frame,
         end_frame=window.end_frame,
@@ -282,7 +282,7 @@ async def run_monitor_window(
     )
 
 
-async def run_monitor_sweep(
+async def run_error_detection_sweep(
     video_id: str,
     start_s: float = 0.0,
     end_s: float | None = None,
@@ -290,8 +290,8 @@ async def run_monitor_sweep(
     window_s: float = DEFAULT_WINDOW_S,
     max_concurrent_windows: int = 6,
     annotations: ErrorAnnotations | None = None,
-    on_window_complete: Callable[[MonitorWindowAssessment], Awaitable[None]] | None = None,
-) -> list[MonitorWindowAssessment]:
+    on_window_complete: Callable[[ErrorDetectionWindowAssessment], Awaitable[None]] | None = None,
+) -> list[ErrorDetectionWindowAssessment]:
     """Runs the full detection pipeline over every window in [start_s, end_s).
     `annotations` is only used to derive the real sample-rate-based window
     grid (tools/sedmamba_labels.py) — never to decide any window's outcome;
@@ -300,7 +300,7 @@ async def run_monitor_sweep(
 
     `on_window_complete`, if given, is awaited as EACH window finishes (via
     asyncio.as_completed, not only after the whole sweep) — this is what
-    lets a caller (agents/monitor/agent.py) stream every sub-agent's real
+    lets a caller (agents/error_detection/agent.py) stream every sub-agent's real
     input/output onto the graph in real time, not just the final fired
     result batched at the end. The offline validation sweep
     (scripts/run_monitor_validation_sweep.py) doesn't pass this — it never
@@ -310,12 +310,12 @@ async def run_monitor_sweep(
 
     semaphore = asyncio.Semaphore(max_concurrent_windows)
 
-    async def bounded(window: MonitorWindow) -> MonitorWindowAssessment:
+    async def bounded(window: ErrorDetectionWindow) -> ErrorDetectionWindowAssessment:
         async with semaphore:
-            return await run_monitor_window(video_id, window)
+            return await run_error_detection_window(video_id, window)
 
     tasks = [asyncio.ensure_future(bounded(w)) for w in windows]
-    results: list[MonitorWindowAssessment] = []
+    results: list[ErrorDetectionWindowAssessment] = []
     for coro in asyncio.as_completed(tasks):
         assessment = await coro
         results.append(assessment)
@@ -324,7 +324,7 @@ async def run_monitor_sweep(
     return results
 
 
-def build_divergence_events(case_id: str, assessment: MonitorWindowAssessment, phase: str) -> list[DivergenceEvent]:
+def build_divergence_events(case_id: str, assessment: ErrorDetectionWindowAssessment, phase: str) -> list[DivergenceEvent]:
     """One real DivergenceEvent per category that actually fired this window
     — a window can now have zero, one, or several (unconditional deep pass
     across all 6 categories, docs/latency_optimization.md), unlike the old
@@ -342,7 +342,7 @@ def build_divergence_events(case_id: str, assessment: MonitorWindowAssessment, p
                 window_end_frame=assessment.end_frame,
                 phase=phase,
                 error_category=category,
-                source="monitor_agentic_detection",
+                source="error_detection_agentic",
                 sub_agent_assessments=result.assessments,
                 psi=compute_psi(category),
                 tier_used=_FIXED_DEEP_TIER,
@@ -353,49 +353,49 @@ def build_divergence_events(case_id: str, assessment: MonitorWindowAssessment, p
                     f"composite_score={result.composite_score:.2f} vs threshold={assessment.threshold_used:.2f}; "
                     f"{sum(1 for a in result.assessments if a.error_present)}/3 agents flagged '{category}'"
                 ),
-                source_agent="monitor_coordinator",
-                source_tool="run_monitor_window",
+                source_agent="error_detection_coordinator",
+                source_tool="run_error_detection_window",
             )
         )
     return events
 
 
-class MonitorCoordinatorAgent(BaseAgent):
+class ErrorDetectionCoordinatorAgent(BaseAgent):
     """Real ADK BaseAgent coordinator — see module docstring for why this is
     a BaseAgent (not LlmAgent, not ParallelAgent) and why the actual per-
     window logic lives in the module-level functions above rather than only
     inside _run_async_impl."""
 
-    def __init__(self, name: str = "monitor_coordinator"):
+    def __init__(self, name: str = "error_detection_coordinator"):
         # Fresh, identically-configured instances — not _SCREEN_AGENTS.values()
         # (see that dict's own comment: reusing those singletons here breaks
-        # the moment MonitorCoordinatorAgent is constructed a second time).
+        # the moment ErrorDetectionCoordinatorAgent is constructed a second time).
         super().__init__(name=name, sub_agents=[build_subagent(role, mode="screen") for role in _ROLES])
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
         video_id = state.get("video_id")
         case_id = state.get("case_id", ctx.session.id)
-        start_s = float(state.get("monitor_start_s", 0.0))
-        end_s = state.get("monitor_end_s")
+        start_s = float(state.get("error_detection_start_s", 0.0))
+        end_s = state.get("error_detection_end_s")
         end_s = float(end_s) if end_s is not None else None
 
         if not video_id:
-            yield Event(author=self.name, content=types.Content(role="model", parts=[types.Part.from_text(text="monitor_coordinator: no video_id in session state, nothing to do")]))
+            yield Event(author=self.name, content=types.Content(role="model", parts=[types.Part.from_text(text="error_detection_coordinator: no video_id in session state, nothing to do")]))
             return
 
-        # Deferred import: agents/monitor/agent.py imports FROM this module
-        # (MonitorWindowAssessment, build_divergence_events, run_monitor_sweep),
-        # so importing monitor_case at module level here would be circular.
+        # Deferred import: agents/error_detection/agent.py imports FROM this module
+        # (ErrorDetectionWindowAssessment, build_divergence_events, run_error_detection_sweep),
+        # so importing error_detection_case at module level here would be circular.
         # This is the one place the "proper" ADK-invocation path needs it —
-        # calling run_monitor_sweep directly (as an earlier version of this
+        # calling run_error_detection_sweep directly (as an earlier version of this
         # method did) skips agent.py's on_window_complete callback entirely,
-        # meaning Orchestrator invoking Monitor through the standard ADK flow
+        # meaning Orchestrator invoking Error Detection through the standard ADK flow
         # would silently emit ZERO real-time graph traceability, unlike the
-        # agent.py::monitor_case path used everywhere else. Unify on the one
+        # agent.py::error_detection_case path used everywhere else. Unify on the one
         # entry point that actually writes to the graph.
-        from agents.monitor.agent import monitor_case
+        from agents.error_detection.agent import error_detection_case
 
-        fired = await monitor_case(case_id, video_id, start_s=start_s, end_s=end_s)
-        summary = f"Monitor swept case {case_id}, {len(fired)} divergence(s) fired."
+        fired = await error_detection_case(case_id, video_id, start_s=start_s, end_s=end_s)
+        summary = f"Error Detection swept case {case_id}, {len(fired)} divergence(s) fired."
         yield Event(author=self.name, content=types.Content(role="model", parts=[types.Part.from_text(text=summary)]))

@@ -1,4 +1,4 @@
-"""The three real Monitor sub-agents (plan §3.5): Temporal, Spatial,
+"""The three real Error Detection sub-agents (plan §3.5): Temporal, Spatial,
 Procedural. Each is an independent ADK `LlmAgent` making its own real
 Gemini vision call over its own frame sample from the same window — no
 `tools=`, pure structured vision reasoning (deliberately different from
@@ -6,7 +6,7 @@ the tool-calling pattern used by e.g. the Anticipation Agent, since here
 the entire "tool" a call needs is the frames + knowledge block already in
 the prompt — there's nothing further to look up mid-reasoning).
 
-The coordinator (agents/monitor/coordinator.py) invokes these directly via
+The coordinator (agents/error_detection/coordinator.py) invokes these directly via
 their own Runner, never through ADK's `sub_agents` LLM-delegation transfer
 (that primitive means "hand off to exactly one," the wrong shape for
 "always run all three and combine them" — see coordinator.py's docstring).
@@ -25,7 +25,7 @@ from __future__ import annotations
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel, Field
 
-from agents.monitor.knowledge import render_knowledge_block
+from agents.error_detection.knowledge import render_knowledge_block
 from state.schema import ErrorCategory, ExpertiseTier, SubAgentRole
 from tools.gemini_model import new_agent_model
 
@@ -145,7 +145,7 @@ def build_subagent(
 ) -> LlmAgent:
     if mode == "screen":
         return LlmAgent(
-            name=f"monitor_{role}_screen",
+            name=f"error_detection_{role}_screen",
             model=new_agent_model(),
             instruction=_screen_instruction(role),
             output_schema=ScreenOutput,
@@ -154,7 +154,7 @@ def build_subagent(
         if category is None:
             raise ValueError("deep mode requires a category")
         return LlmAgent(
-            name=f"monitor_{role}_deep_{category}",
+            name=f"error_detection_{role}_deep_{category}",
             model=new_agent_model(),
             instruction=_deep_instruction(role, category, tier),
             output_schema=DeepOutput,

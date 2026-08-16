@@ -101,7 +101,7 @@ def test_scene_graph_window_output_allows_relation_with_no_target():
 
 
 # --- Ground truth as input context (plan §12) — the deliberate opposite of
-# Monitor's "never imports ground truth" guard, reflecting the different,
+# Error Detection's "never imports ground truth" guard, reflecting the different,
 # explicit design decision for this agent -----------------------------------
 
 
@@ -109,7 +109,7 @@ def test_scene_graph_builder_legitimately_uses_real_ground_truth_as_input_contex
     """Confirms the plan §12 decision is actually implemented, not just
     described: Scene Graph Builder's module DOES import the real phase
     tooling — feeding a real (but unlabeled) structural signal to the model
-    is the deliberate design here, unlike Monitor's live decision path.
+    is the deliberate design here, unlike Error Detection's live decision path.
 
     Segmentation-mask context was deliberately dropped (not an oversight)
     as of docs/latency_optimization.md's restructuring — real, confirmed
@@ -128,7 +128,7 @@ def test_scene_graph_builder_legitimately_uses_real_ground_truth_as_input_contex
 
 def test_orchestrator_agent_can_be_constructed_more_than_once():
     """Regression guard: an ADK agent instance can only ever have one
-    parent, permanently. An earlier version of both MonitorCoordinatorAgent
+    parent, permanently. An earlier version of both ErrorDetectionCoordinatorAgent
     and OrchestratorAgent declared `sub_agents=` using shared module-level
     singleton instances — fine for a single construction, but a second
     construction raised a real pydantic ValidationError ("already has a
@@ -139,4 +139,8 @@ def test_orchestrator_agent_can_be_constructed_more_than_once():
 
     for _ in range(3):
         agent = OrchestratorAgent()
-        assert {s.name for s in agent.sub_agents} == {"monitor_coordinator", "scene_graph_builder", "anticipation"}
+        # Anticipation is deliberately absent — docs/agentic_workflow.md's
+        # roster has no card for it, so it is not dispatched. Its code still
+        # exists under agents/anticipation/; this asserts the roster, not that
+        # the module was deleted.
+        assert {s.name for s in agent.sub_agents} == {"error_detection_coordinator", "scene_graph_builder"}

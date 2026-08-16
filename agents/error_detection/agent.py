@@ -1,10 +1,10 @@
-"""Monitor Agent's public entry point — what Orchestrator calls.
+"""Error Detection Agent's public entry point — what Orchestrator calls.
 
 Streams real-time traceability onto the graph as each window completes
 (not just the final fired divergences, batched after the fact): every
 sub-agent's real input (which window/frames it examined) and output (its
 actual reasoning text) becomes a visible actionEdge the moment that
-window's analysis finishes (agents/monitor/coordinator.py's
+window's analysis finishes (agents/error_detection/coordinator.py's
 `on_window_complete` callback, driven by asyncio.as_completed — see that
 module for why). A window can now fire MULTIPLE real divergences (one per
 error category that independently crossed threshold — see
@@ -19,17 +19,17 @@ actually processed) — not just phase/event nodes as before.
 
 from __future__ import annotations
 
-from agents.monitor.coordinator import MonitorWindowAssessment, build_divergence_events, run_monitor_sweep
+from agents.error_detection.coordinator import ErrorDetectionWindowAssessment, build_divergence_events, run_error_detection_sweep
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.action_labels import load_action_segments, phase_at_frame
 from tools.state_tools import apply_state_patch, get_state_snapshot
 from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_time, format_video_time_range
 
 SUB_AGENT_LABELS = {
-    "monitor_coordinator": "Monitor Coordinator",
-    "monitor_temporal": "Temporal Agent",
-    "monitor_spatial": "Spatial Agent",
-    "monitor_procedural": "Procedural Agent",
+    "error_detection_coordinator": "Error Detection Coordinator",
+    "error_detection_temporal": "Temporal Agent",
+    "error_detection_spatial": "Spatial Agent",
+    "error_detection_procedural": "Procedural Agent",
 }
 
 
@@ -45,31 +45,31 @@ async def _ensure_agent_nodes(case_id: str) -> None:
                 node_type="agent",
                 label=label,
                 source_agent=node_id,
-                source_tool="monitor_case",
+                source_tool="error_detection_case",
             ),
             reason=f"{label} registered for this case",
         )
 
     # Real hierarchy, not decorative: the coordinator genuinely owns these
-    # three sub-agents as its real ADK sub_agents (agents/monitor/coordinator.py),
+    # three sub-agents as its real ADK sub_agents (agents/error_detection/coordinator.py),
     # invoked directly every window — this edge is what lets the graph show
     # that real structure instead of the sub-agent nodes floating unconnected
     # until their first per-window analysis edge happens to land.
     for sub_node_id, sub_label in SUB_AGENT_LABELS.items():
-        if sub_node_id == "monitor_coordinator":
+        if sub_node_id == "error_detection_coordinator":
             continue
         await apply_state_patch(
             case_id,
             edge=GraphEdgePatch(
-                edge_id=f"edge:hierarchy-monitor_coordinator-{sub_node_id}",
-                source_node_id="agent:monitor_coordinator",
+                edge_id=f"edge:hierarchy-error_detection_coordinator-{sub_node_id}",
+                source_node_id="agent:error_detection_coordinator",
                 target_node_id=f"agent:{sub_node_id}",
-                edge_kind="action",
-                source_agent="monitor_coordinator",
-                source_tool="monitor_case",
-                reason=f"Monitor Coordinator owns {sub_label}",
+                edge_kind="hierarchy",
+                source_agent="error_detection_coordinator",
+                source_tool="error_detection_case",
+                reason=f"Error Detection Coordinator owns {sub_label}",
             ),
-            reason=f"Monitor Coordinator owns {sub_label}",
+            reason=f"Error Detection Coordinator owns {sub_label}",
         )
 
 
@@ -91,14 +91,14 @@ async def _widen_agent_time_ranges(
                 node_type="agent",
                 label=f"{label} ({format_video_time_range(*new_range)})",
                 source_agent=node_id,
-                source_tool="monitor_case",
+                source_tool="error_detection_case",
             ),
             reason=f"{label} processed window {format_video_time_range(window_start_s, window_end_s)}",
         )
 
 
 async def _ensure_phase_node(case_id: str, phase: str, phases_seen: set[str], time_range_label: str) -> None:
-    """Monitor's own sub-agents reason about error categories, not general
+    """Error Detection's own sub-agents reason about error categories, not general
     phase identity — it has no real semantic description of its own to
     offer for a phase node's label (unlike Scene Graph Builder's real
     `activity_description` or Anticipation's own live naming, plan §13.4).
@@ -115,7 +115,7 @@ async def _ensure_phase_node(case_id: str, phase: str, phases_seen: set[str], ti
     node_id = f"phase:{phase}"
     snapshot = await get_state_snapshot(case_id)
     existing = next((n for n in snapshot.nodes if n.node_id == node_id), None)
-    if existing is not None and existing.source_agent != "monitor_coordinator":
+    if existing is not None and existing.source_agent != "error_detection_coordinator":
         return  # a real semantic label already exists — don't clobber it with the generic fallback
     await apply_state_patch(
         case_id,
@@ -123,23 +123,23 @@ async def _ensure_phase_node(case_id: str, phase: str, phases_seen: set[str], ti
             node_id=node_id,
             node_type="phase",
             label=f"Phase {phase} ({time_range_label})",
-            source_agent="monitor_coordinator",
-            source_tool="monitor_case",
+            source_agent="error_detection_coordinator",
+            source_tool="error_detection_case",
         ),
         reason=f"Phase {phase} first referenced",
     )
 
 
-async def monitor_case(
+async def error_detection_case(
     case_id: str, video_id: str, start_s: float = 0.0, end_s: float | None = None, window_s: float = DEFAULT_WINDOW_S
 ) -> list[DivergenceEvent]:
-    """Runs the live Monitor detection over [start_s, end_s) of `video_id`
+    """Runs the live Error Detection detection over [start_s, end_s) of `video_id`
     and returns every DivergenceEvent that actually fired (zero, one, or
     several per window — see module docstring).
 
     `stride_s=window_s` (non-overlapping windows) here — the offline
     validation sweep (scripts/run_monitor_validation_sweep.py) uses
-    run_monitor_sweep/generate_windows directly with its own dense 1s-
+    run_error_detection_sweep/generate_windows directly with its own dense 1s-
     stride CARES grid (~262 windows for a 271s video) to score macro-F1
     against per-second ground truth; that grid is real for measuring
     accuracy but far too expensive to run live (~21 real Gemini calls per
@@ -160,7 +160,7 @@ async def monitor_case(
     agent_ranges: dict[str, tuple[float, float]] = {}
     events: list[DivergenceEvent] = []
 
-    async def on_window_complete(assessment: MonitorWindowAssessment) -> None:
+    async def on_window_complete(assessment: ErrorDetectionWindowAssessment) -> None:
         phase = phase_at_frame(video_id, assessment.start_frame, segments=segments) or "unknown"
         segment = next((s for s in segments if s.start_frame <= assessment.start_frame <= s.end_frame), None)
         phase_time_range = (
@@ -178,23 +178,23 @@ async def monitor_case(
         # what makes the graph work as a live trace of what each agent is
         # actually doing, not just a record of the final verdict. (The
         # "top" category's assessments — see coordinator.py's
-        # MonitorWindowAssessment docstring for why only one set is surfaced
+        # ErrorDetectionWindowAssessment docstring for why only one set is surfaced
         # here even though all 6 categories were really checked.)
         for sub in assessment.sub_agent_assessments:
             await apply_state_patch(
                 case_id,
                 edge=GraphEdgePatch(
                     edge_id=f"edge:{sub.agent_role}-{assessment.window_id}",
-                    source_node_id=f"agent:monitor_{sub.agent_role}",
+                    source_node_id=f"agent:error_detection_{sub.agent_role}",
                     target_node_id=f"phase:{phase}",
-                    edge_kind="action",
-                    source_agent=f"monitor_{sub.agent_role}",
-                    source_tool="run_monitor_window",
+                    edge_kind="detection",
+                    source_agent=f"error_detection_{sub.agent_role}",
+                    source_tool="run_error_detection_window",
                     reason=sub.reasoning,
                 ),
                 reason=sub.reasoning,
-                source_agent=f"monitor_{sub.agent_role}",
-                source_tool="run_monitor_window",
+                source_agent=f"error_detection_{sub.agent_role}",
+                source_tool="run_error_detection_window",
             )
 
         for divergence in build_divergence_events(case_id, assessment, phase):
@@ -205,20 +205,20 @@ async def monitor_case(
             # anchors the event to, converted to the video's own real time
             # via the real fps (never assumed/hardcoded).
             video_time_s = divergence.frame / fps
-            event_node_id = f"event:{divergence.event_id}"
+            event_node_id = f"error:{divergence.event_id}"
             await apply_state_patch(
                 case_id,
                 node=GraphNodePatch(
                     node_id=event_node_id,
-                    node_type="event",
+                    node_type="error",
                     label=f"Divergence: {divergence.error_category} at {format_video_time(video_time_s)}",
                     attrs={
                         "confidence": divergence.confidence,
                         "composite_score": divergence.composite_score,
                         "video_time_s": round(video_time_s, 1),
                     },
-                    source_agent="monitor_coordinator",
-                    source_tool="monitor_case",
+                    source_agent="error_detection_coordinator",
+                    source_tool="error_detection_case",
                 ),
                 reason=divergence.reasoning_trace,
             )
@@ -228,15 +228,15 @@ async def monitor_case(
                     edge_id=f"edge:{divergence.event_id}",
                     source_node_id=f"phase:{phase}",
                     target_node_id=event_node_id,
-                    edge_kind="observed",
-                    source_agent="monitor_coordinator",
-                    source_tool="monitor_case",
+                    edge_kind="detection",
+                    source_agent="error_detection_coordinator",
+                    source_tool="error_detection_case",
                     reason=divergence.reasoning_trace,
                 ),
                 reason=divergence.reasoning_trace,
             )
 
-    await run_monitor_sweep(
+    await run_error_detection_sweep(
         video_id, start_s=start_s, end_s=end_s, window_s=window_s, stride_s=window_s, on_window_complete=on_window_complete
     )
     return events

@@ -1,6 +1,4 @@
 :root {
-  color-scheme: light;
-
   /* Chart/UI chrome & ink — dataviz skill default palette (light) */
   --surface-1: #fcfcfb;
   --page: #f9f9f7;
@@ -20,6 +18,8 @@
   --series-6: #008300; /* green */
   --series-7: #4a3aa7; /* violet */
   --series-8: #e34948; /* red */
+  --node-brown: #8a5a2b; /* brown — Benchmark & Documentation nodes (plan_v2 §4.1);
+                            not a categorical slot, never used for agent identity */
 
   /* Status (fixed — never themed) */
   --status-good: #0ca30c;
@@ -31,9 +31,10 @@
   --font-mono: ui-monospace, "SF Mono", Consolas, monospace;
 
   font-family: var(--font-sans);
-  color-scheme: light dark;
   color: var(--text-primary);
   background: var(--page);
+  /* pinned light — see index.html's data-theme */
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -60,6 +61,7 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-8: #e66767;
+    --node-brown: #b98a5a;
   }
 }
 
@@ -82,6 +84,7 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
+  --node-brown: #b98a5a;
 }
 
 * {

@@ -126,7 +126,7 @@ def test_get_state_snapshot_local_fallback_round_trip(monkeypatch):
             case_id,
             edge=GraphEdgePatch(
                 edge_id="edge:a", source_node_id="phase:1", target_node_id="phase:2",
-                edge_kind="predicted", confirmation_signal="pending", source_agent="test", source_tool="test",
+                edge_kind="prediction", confirmation_signal="pending", source_agent="test", source_tool="test",
             ),
             reason="predicted",
         )
@@ -146,7 +146,7 @@ def test_get_state_snapshot_filters_removed_edges(monkeypatch):
     async def run():
         await apply_state_patch(
             case_id,
-            edge=GraphEdgePatch(edge_id="edge:x", source_node_id="a", target_node_id="b", edge_kind="predicted", source_agent="t", source_tool="t"),
+            edge=GraphEdgePatch(edge_id="edge:x", source_node_id="a", target_node_id="b", edge_kind="prediction", source_agent="t", source_tool="t"),
             reason="created",
         )
         from tools.state_tools import RUNTIME_DIR
@@ -155,7 +155,7 @@ def test_get_state_snapshot_filters_removed_edges(monkeypatch):
         path = RUNTIME_DIR / f"{case_id}_graph_patches.jsonl"
         removed_event = StateDiffEvent(
             case_id=case_id, seq=0, op="remove_edge",
-            edge=GraphEdgePatch(edge_id="edge:x", source_node_id="a", target_node_id="b", edge_kind="predicted", source_agent="t", source_tool="t"),
+            edge=GraphEdgePatch(edge_id="edge:x", source_node_id="a", target_node_id="b", edge_kind="prediction", source_agent="t", source_tool="t"),
             reason="removed", source_agent="t", source_tool="t",
         )
         with open(path, "a") as f:

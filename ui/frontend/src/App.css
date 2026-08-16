@@ -301,7 +301,12 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 210px;
+  /* No width here: plan_v2 §4.1 specifies fixed HEIGHT with length growing to
+     fit the label. layout.ts measures each label and sets width inline, so the
+     node renders at exactly the size dagre reserved for it. A width in CSS
+     would silently override that and reintroduce the overlap. */
+  height: 56px; /* must match NODE_HEIGHT in measureLabel.ts */
+  justify-content: center;
   padding: 8px 10px;
   border-radius: 8px;
   border: 1.5px solid var(--border);
@@ -331,9 +336,12 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--text-primary);
+  /* nowrap keeps the fixed height honest; the node is measured to fit so this
+     should never actually clip. The ellipsis is a backstop for the MAX_NODE_WIDTH
+     ceiling in measureLabel.ts, not the normal path. */
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   min-width: 0;
 }
 
@@ -371,9 +379,9 @@
 }
 
 .graph-legend__body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px 16px;
   margin-top: 8px;
 }
 
@@ -394,6 +402,25 @@
   width: 14px;
   text-align: center;
   flex-shrink: 0;
+}
+
+/* A miniature of a real node: outline carries the node kind (including the
+   dotted outline corrective proposals get), glyph carries the kind's shape.
+   Same two channels the real nodes use, so the legend is a scale model rather
+   than a separate encoding a viewer has to learn twice. */
+.graph-legend__node-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 14px;
+  flex-shrink: 0;
+  border-width: 1.5px;
+  border-radius: 3px;
+  background: var(--surface-1);
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-secondary);
 }
 
 .graph-legend__swatch {

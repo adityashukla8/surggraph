@@ -1,43 +1,40 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import type { CaseGraphNodeData } from "./types";
-import { agentColorVar, NODE_TYPE_ICON, CONFIRMATION_STATUS_COLOR, EVENT_NODE_ACCENT } from "./palette";
+import {
+  agentColorVar,
+  nodeKindColorVar,
+  nodeKindOutlineStyle,
+  NODE_TYPE_ICON,
+  CONFIRMATION_STATUS_COLOR,
+} from "./palette";
 
 export type CaseFlowNode = Node<CaseGraphNodeData, "caseNode">;
 
-// The graph is an at-a-glance map, not a transcript — a full sentence-length
-// activity_description (Scene Graph Builder's real output can run to 150+
-// chars) blows out the node box and wrecks dagre's layout assumptions
-// (layout.ts sizes every box the same). Truncate what's ON the node; the
-// full untruncated text is still real and still available via the native
-// title tooltip below, never discarded.
-const MAX_LABEL_LENGTH = 42;
-
-function truncateLabel(label: string): string {
-  return label.length > MAX_LABEL_LENGTH ? `${label.slice(0, MAX_LABEL_LENGTH - 1).trimEnd()}…` : label;
-}
-
 function CaseNode({ data }: NodeProps<CaseFlowNode>) {
-  const accent =
-    data.entityType === "agent"
-      ? agentColorVar(data.sourceAgent)
-      : data.entityType === "event"
-        ? EVENT_NODE_ACCENT
-        : "var(--baseline)";
+  // Two independent signals on two channels (see palette.ts): the outline says
+  // WHAT KIND of thing this is, the icon says WHICH AGENT produced it.
+  const kindColor = nodeKindColorVar(data.nodeType);
+  const outlineStyle = nodeKindOutlineStyle(data.nodeType);
+  const agentColor = agentColorVar(data.sourceAgent);
   const isPredicted = Boolean(data.predicted);
   const statusColor = data.confirmationSignal ? CONFIRMATION_STATUS_COLOR[data.confirmationSignal] : undefined;
 
   return (
     <div
-      className={`case-node case-node--${data.entityType}${isPredicted ? " case-node--predicted" : ""}`}
-      style={{ borderColor: accent }}
+      className={`case-node case-node--${data.nodeType}${isPredicted ? " case-node--predicted" : ""}`}
+      style={{ borderColor: kindColor, borderStyle: outlineStyle, width: data.width }}
       title={`${data.label}\n${data.sourceAgent} · ${data.sourceTool} · ${new Date(data.timestamp).toLocaleTimeString()}`}
     >
-      <Handle type="target" position={Position.Left} style={{ background: accent }} />
+      <Handle type="target" position={Position.Left} style={{ background: kindColor }} />
       <div className="case-node__row">
-        <span className="case-node__icon" style={{ color: accent }}>
-          {NODE_TYPE_ICON[data.entityType] ?? "●"}
+        <span className="case-node__icon" style={{ color: agentColor }}>
+          {NODE_TYPE_ICON[data.nodeType] ?? "●"}
         </span>
-        <span className="case-node__label">{truncateLabel(data.label)}</span>
+        {/* Label is NOT truncated: plan_v2 §4.1 specifies fixed height with
+            length growing to fit the text, and neighbors repositioning around
+            it. layout.ts measures the real rendered width and feeds it to
+            dagre so growth never causes overlap. */}
+        <span className="case-node__label">{data.label}</span>
       </div>
       {(data.confidence !== undefined || statusColor) && (
         <div className="case-node__meta">
@@ -49,7 +46,7 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
           )}
         </div>
       )}
-      <Handle type="source" position={Position.Right} style={{ background: accent }} />
+      <Handle type="source" position={Position.Right} style={{ background: kindColor }} />
     </div>
   );
 }

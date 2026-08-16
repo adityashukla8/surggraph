@@ -1,4 +1,4 @@
-"""Clinical error-knowledge scaffold for the Monitor Agent's sub-agents.
+"""Clinical error-knowledge scaffold for the Error Detection Agent's sub-agents.
 
 Legitimately hand-authored — same carve-out already established for World
 Model's symbolic rules (plan §3.5, §6 Day 6 note). OCHRA (Objective Clinical
@@ -6,7 +6,7 @@ Human Reliability Analysis) is fixed external clinical doctrine, not
 something derivable from this project's one video. What must never be
 hardcoded is the *reasoning* (whether an error is present in a given
 window — that's 100% live Gemini inference over real frames, see
-agents/monitor/subagents.py); what's legitimately fixed here is the
+agents/error_detection/subagents.py); what's legitimately fixed here is the
 *domain-knowledge scaffold* that reasoning is grounded against, mirroring
 exactly how CARES itself works (its own ablation shows this knowledge-
 embedded prompting drives ~80% of its total accuracy gain over a naive

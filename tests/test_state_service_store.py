@@ -80,7 +80,7 @@ def _edge_event(case_id: str, edge_id: str, op: str = "add_edge") -> StateDiffEv
             edge_id=edge_id,
             source_node_id="agent:a",
             target_node_id="agent:b",
-            edge_kind="action",
+            edge_kind="hierarchy",
             source_agent="test_suite",
             source_tool="test_state_service_store",
         ),

@@ -14,7 +14,7 @@ function toFlowNode(patch: GraphNodePatch): CaseFlowNode {
     type: "caseNode",
     position: { x: 0, y: 0 }, // overwritten by layoutGraph
     data: {
-      entityType: patch.node_type,
+      nodeType: patch.node_type,
       label: patch.label,
       sourceAgent: patch.source_agent,
       sourceTool: patch.source_tool,

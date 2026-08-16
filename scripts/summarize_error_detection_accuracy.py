@@ -1,4 +1,4 @@
-"""Summarizes data/validation/monitor_accuracy.jsonl (written by
+"""Summarizes data/validation/error_detection_accuracy.jsonl (written by
 scripts/run_monitor_validation_sweep.py) into macro-F1 and a per-category/
 per-tier breakdown.
 
@@ -11,7 +11,7 @@ bar — a comparable or lower number here is expected on a single video with
 project-authored (not CARES-published) tis/cis/alpha/threshold values, and
 should be reported as such, not apologized for.
 
-Usage: uv run scripts/summarize_monitor_accuracy.py
+Usage: uv run scripts/summarize_error_detection_accuracy.py
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-VALIDATION_LOG_PATH = Path(__file__).resolve().parent.parent / "data" / "validation" / "monitor_accuracy.jsonl"
+VALIDATION_LOG_PATH = Path(__file__).resolve().parent.parent / "data" / "validation" / "error_detection_accuracy.jsonl"
 
 
 def load_records() -> list[dict]:

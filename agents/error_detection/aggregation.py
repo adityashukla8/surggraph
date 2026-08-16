@@ -1,7 +1,7 @@
 """Deterministic risk-routing and weighted-aggregation math for the Monitor
 Agent (plan §3.5) — CARES Eq. 1-8, reimplemented in plain Python.
 
-Deliberately NOT an LLM call. The three sub-agents (agents/monitor/subagents.py)
+Deliberately NOT an LLM call. The three sub-agents (agents/error_detection/subagents.py)
 do all the real vision reasoning; this module only combines their already-
 decided outputs. Matches the pattern already established for the Anticipation
 Agent (get_phase_transition_priors is deterministic computation the LLM
@@ -22,12 +22,12 @@ from state.schema import ErrorCategory, SubAgentRole
 #
 # TODO(still deferred — real data exists twice now, still not re-tuned):
 # original 261-window sweep (2026-08-13, pre frame-driven restructuring,
-# archived at data/validation/monitor_accuracy_2026-08-13_pre_framedriven.jsonl)
+# archived at data/validation/error_detection_accuracy_2026-08-13_pre_framedriven.jsonl)
 # — macro_f1=0.408, confusion tp=119 fp=18 fn=111 tn=13. Rerun 2026-08-15
 # after both tiers moved to still frames (53 windows, 5s stride, coarser
 # sample — not a strict re-test of the same 262-window set, so treat the
 # comparison as directional, not exact) — macro_f1=0.515 (data/validation/
-# monitor_accuracy.jsonl), confusion tp=29 fp=2 fn=18 tn=4. Same real
+# error_detection_accuracy.jsonl), confusion tp=29 fp=2 fn=18 tn=4. Same real
 # pattern both times: heavily skewed toward false negatives relative to
 # false positives, meaning DEFAULT_THRESHOLD=1.7 is still likely too
 # conservative for this video's real data. Re-tuning against the real
@@ -58,7 +58,7 @@ def pick_escalation_candidate(category_confidences: list[dict[ErrorCategory, flo
     picks the one with the highest max-confidence across agents. Returns None
     if nothing clears the bar — that window never gets risk-routed (pass 2
     is skipped, and the screen-pass booleans stand in as the final O values,
-    disclosed via MonitorWindowAssessment.psi/tier_used being None)."""
+    disclosed via ErrorDetectionWindowAssessment.psi/tier_used being None)."""
     best_category: ErrorCategory | None = None
     best_confidence = ESCALATION_CONFIDENCE_BAR
     for confidences in category_confidences:

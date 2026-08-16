@@ -38,13 +38,68 @@ class Provenanced(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Graph patches — the shared schema used by TrajectoryPatch.predicted_state_delta,
-# StateDiffEvent, and the frontend's ReactFlow node/edge `data` (plan §3.4/§4.2).
+# The Living Graph vocabulary — docs/plan_v2_autonomous_safety_system.md §4.
+#
+# The graph is the system's ground truth for what has happened, what is
+# happening, what is predicted to happen, and what is proposed to happen.
+# Every reasoning step reads from it and writes to it, and the storage layer
+# below it knows nothing about surgery — only generic multi-tenant graph
+# storage and change streaming.
+#
+# ui/frontend/src/graph/types.ts mirrors this by hand — keep both in sync.
 # ---------------------------------------------------------------------------
 
-NodeEntityType = Literal["agent", "phase", "entity", "artifact", "event"]
-EdgeKind = Literal["predicted", "action", "observed", "revised"]
+NodeType = Literal[
+    # --- Structural: the case skeleton, drawn up front at case open ---------
+    "trigger",  # the case-open event the whole pipeline hangs off
+    "agent",  # agent:{name} — a reasoning role in the hierarchy
+    "patient_twin",  # the synthetic patient profile, loaded once per case
+    # --- Perception (plan_v2 §7): the two-tier registry + event stream ------
+    "entity",  # entity:{stable_id} — long-lived, updated in place
+    "perception_event",  # event:{seq}:{kind} — append-only, immutable
+    "snapshot",  # snapshot:{slot} — singleton, fixed cardinality
+    "phase",  # phase:{opaque_id}:{window} — current + historical + predicted
+    "vitals",  # a physiological-state node, written on trend flag/excursion
+    "manual_event",  # a human-typed event, honestly tagged as such
+    # --- Reasoning chain ----------------------------------------------------
+    "error",  # error:{window}:{category} — one per detected event
+    "complication",  # complication:{root_error_id}:{slug}
+    "literature_evidence",  # literature:{query_hash}:{index}
+    "corrective_trajectory",  # corrective:{root_error_id}:{slug}
+    "divergence_alert",  # divergence:{proposal_id}:{window}
+    # --- Action + safety ----------------------------------------------------
+    "action_intent",  # action_intent:{kind}:{ulid} — a pending external write
+    "verification_block",  # verification:{action_intent_id} — fail-closed gate outcome
+    "action_outcome",  # the external write's real delivery result
+    # --- Post-case ----------------------------------------------------------
+    "benchmark",  # benchmark:{case_id} — singleton, predicted-vs-actual scorecard
+    "documentation",  # documentation:{case_id} — singleton, operative note draft
+]
+
+EdgeKind = Literal[
+    # --- The nine kinds named in plan_v2 §4.2 -------------------------------
+    "detection",  # perception -> error/divergence
+    "causal_reasoning",  # error -> complication
+    "evidence",  # literature -> complication or corrective_trajectory
+    "prediction",  # current state -> future trajectory state (dashed)
+    "proposal",  # error+complication -> corrective_trajectory (dashed)
+    "trajectory_comparison",  # actual -> corrective, carries alignment/divergence signal
+    "confirmation",  # predicted node reconciled against realized state
+    "verification",  # proposed action -> verification_block outcome
+    "grading",  # predicted -> ground truth, post-case only
+    # --- Three more the workflow prose requires but §4.2's table omits ------
+    "hierarchy",  # orchestrator -> agent, coordinator -> sub-agent (§6 step 1's up-front draw)
+    "involved",  # perception_event -> entity (§7.3: events reference entities, never copy them)
+    "outcome",  # action_intent -> action_outcome (§6 steps 10/14)
+]
+
 ConfirmationSignal = Literal["pending", "confirmed", "refuted"]
+
+# Legacy alias. The old vocabulary was agent|phase|entity|artifact|event;
+# "artifact" split into action_intent/action_outcome and "event" split into
+# perception_event/error/divergence_alert/manual_event, because a
+# high-frequency "entity appeared" must never render like an alarm.
+NodeEntityType = NodeType
 
 
 class GraphNodePatch(Provenanced):
@@ -162,7 +217,7 @@ class AnticipationResult(Provenanced):
 # Divergence — a real, live multi-agent detection (CARES-style; plan §3.5),
 # never a SEDMamba ground-truth lookup. SEDMamba's real labels are used only
 # by the validation sidecar (tools/sedmamba_labels.py) to score detections
-# after the fact — never to decide them. See agents/monitor/ for the
+# after the fact — never to decide them. See agents/error_detection/ for the
 # detection pipeline this model is the output of.
 # ---------------------------------------------------------------------------
 
@@ -178,7 +233,7 @@ SubAgentRole = Literal["temporal", "spatial", "procedural"]
 ExpertiseTier = Literal["resident", "attending", "expert"]
 
 
-class MonitorSubAgentAssessment(BaseModel):
+class ErrorDetectionSubAgentAssessment(BaseModel):
     agent_role: SubAgentRole
     tier_used: ExpertiseTier
     error_present: bool  # O_{p,x}(V) in CARES' Eq. 7 notation
@@ -196,8 +251,8 @@ class DivergenceEvent(Provenanced):
     window_end_frame: int
     phase: str
     error_category: ErrorCategory | Literal["manual_injection"]
-    source: Literal["monitor_agentic_detection", "manual_injection"]
-    sub_agent_assessments: list[MonitorSubAgentAssessment] = Field(default_factory=list)  # len 3 for agentic; [] for manual
+    source: Literal["error_detection_agentic", "manual_injection"]
+    sub_agent_assessments: list[ErrorDetectionSubAgentAssessment] = Field(default_factory=list)  # len 3 for agentic; [] for manual
     psi: int | None = None  # Ψ = TIS + CIS, set only if pass-2 risk-routing ran for this window
     tier_used: ExpertiseTier | None = None
     composite_score: float | None = None  # CARES Eq. 7 weighted sum

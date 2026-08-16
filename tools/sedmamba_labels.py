@@ -1,12 +1,12 @@
 """Validation-sidecar loader for SEDMamba's real, frame-level surgical error
 ground-truth labels.
 
-VALIDATION ONLY — this module must never be imported from Monitor Agent's
-live decision path (agents/monitor/coordinator.py, agents/monitor/aggregation.py).
-It exists to (a) score the Monitor Agent's live agentic detections against
+VALIDATION ONLY — this module must never be imported from Error Detection Agent's
+live decision path (agents/error_detection/coordinator.py, agents/error_detection/aggregation.py).
+It exists to (a) score the Error Detection Agent's live agentic detections against
 real ground truth after the fact, and (b) locate a real true-positive window
 to feature in the demo. The detection decision itself always comes from live
-Gemini reasoning over real frames (see agents/monitor/coordinator.py) — see
+Gemini reasoning over real frames (see agents/error_detection/coordinator.py) — see
 plan §3.5 for why the original "fire on this file's label" design was
 rejected as a disguised lookup table, not genuine monitoring.
 
@@ -20,7 +20,7 @@ assumed): a pickle per video containing a dict with:
   - 'feature': DINOv2 embeddings — not used here.
 
 No categorical (24-type) error breakdown is present in this file; only the
-binary error/normal signal (see agents/monitor/knowledge.py for how the
+binary error/normal signal (see agents/error_detection/knowledge.py for how the
 6 CARES-published error categories are used instead).
 """
 
@@ -105,7 +105,7 @@ def load_error_annotations(video_id: str) -> ErrorAnnotations:
 
 
 @dataclass(frozen=True)
-class MonitorWindow:
+class ErrorDetectionWindow:
     window_id: str
     start_idx: int  # inclusive, index into ErrorAnnotations.error_gt / frame_numbers
     end_idx: int  # inclusive
@@ -121,7 +121,7 @@ def generate_windows(
     stride_s: float = 1.0,
     start_s: float = 0.0,
     end_s: float | None = None,
-) -> list[MonitorWindow]:
+) -> list[ErrorDetectionWindow]:
     """Slides directly in the real 5Hz-derived sample-index space (not raw
     frame or wall-clock space) so window edges always land on a real sample
     — no ambiguity when comparing to ground truth. `start_s`/`end_s` bound
@@ -134,12 +134,12 @@ def generate_windows(
     start_idx_bound = round(start_s * annotations.sample_rate_hz)
     end_idx_bound = n_samples if end_s is None else round(end_s * annotations.sample_rate_hz)
 
-    windows: list[MonitorWindow] = []
+    windows: list[ErrorDetectionWindow] = []
     idx = start_idx_bound
     while idx + window_samples <= min(n_samples, end_idx_bound):
         end_idx = idx + window_samples - 1
         windows.append(
-            MonitorWindow(
+            ErrorDetectionWindow(
                 window_id=f"{annotations.video_id}-w{len(windows):04d}",
                 start_idx=idx,
                 end_idx=end_idx,
@@ -153,15 +153,15 @@ def generate_windows(
     return windows
 
 
-def window_ground_truth(annotations: ErrorAnnotations, window: MonitorWindow) -> bool:
+def window_ground_truth(annotations: ErrorAnnotations, window: ErrorDetectionWindow) -> bool:
     """VALIDATION-ONLY — real SEDMamba ground truth for this window (any
-    sample in range labeled error=1). Never call this before a Monitor
+    sample in range labeled error=1). Never call this before a Error Detection
     detection decision is made; only to score it afterward."""
     return bool(annotations.error_gt[window.start_idx : window.end_idx + 1].any())
 
 
 def log_window_accuracy(path: Path, record: dict[str, Any]) -> None:
-    """Appends one JSON line to the validation log (data/validation/monitor_accuracy.jsonl)."""
+    """Appends one JSON line to the validation log (data/validation/error_detection_accuracy.jsonl)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {**record, "logged_at": datetime.now(timezone.utc).isoformat()}
     with open(path, "a") as f:

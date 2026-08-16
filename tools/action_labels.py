@@ -4,7 +4,7 @@ computes transition priors from). Phase IDs are the dataset's own action
 IDs, as strings, matching `data/priors/phase_transition_matrix.json`'s
 `phases` list convention — never invented labels.
 
-Used by agents/monitor/agent.py to attach a real `phase` value to each
+Used by agents/error_detection/agent.py to attach a real `phase` value to each
 DivergenceEvent until the real Scene Graph Builder agent exists to derive
 phase live from Gemini vision (at which point this becomes the validation-
 sidecar comparison target for that agent instead).

@@ -19,16 +19,16 @@ disconnected from smooth playback — rejected as incompatible with a
 coherent live demo. Agents simply compute as fast as they genuinely can and
 write real results to the graph as they land; the video plays normally.
 
-Today, Monitor is the only real agent that exists — `sub_agents` wraps its
+Today, Error Detection is the only real agent that exists — `sub_agents` wraps its
 real ADK coordinator so Registry/Observability tooling sees a genuine
-child, structured to extend as Scene Graph Builder/Anticipation/etc. get
+child, structured to extend as further agents get
 built (append to the list, not a rewrite).
 
 The heavy lifting lives in the plain async open_case() function, mirroring
-the pattern already established for Monitor (agents/monitor/agent.py's
-monitor_case is "what Orchestrator calls" — this module is what actually
+the pattern already established for Error Detection (agents/error_detection/agent.py's
+error_detection_case is "what Orchestrator calls" — this module is what actually
 calls it): OrchestratorAgent._run_async_impl is a thin ADK-flow adapter,
-not where the real logic lives — matching MonitorCoordinatorAgent's own
+not where the real logic lives — matching ErrorDetectionCoordinatorAgent's own
 docstring rationale for the same split.
 """
 
@@ -43,28 +43,32 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
 
-from agents.anticipation.agent import anticipate_case
-from agents.anticipation.subagent import build_subagent as build_anticipation_subagent
-from agents.monitor.agent import SUB_AGENT_LABELS, monitor_case
-from agents.monitor.coordinator import MonitorCoordinatorAgent
+from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
+from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.scene_graph_builder.agent import scene_graph_case
 from agents.scene_graph_builder.subagent import build_subagent as build_scene_graph_subagent
+from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
+from tools.patient_twin import write_patient_twin_node
 from tools.state_tools import apply_state_patch
 from tools.video_utils import find_video_duration_s, format_video_time_range
 
 # Real, fixed pipeline structure (not decorative) — Orchestrator dispatches
-# exactly these three agents; Monitor Coordinator owns exactly these three
-# sub-agents (its real ADK sub_agents, agents/monitor/coordinator.py).
+# exactly these three agents; Error Detection Coordinator owns exactly these three
+# sub-agents (its real ADK sub_agents, agents/error_detection/coordinator.py).
 # Labels here must match each agent's own internal registration exactly
 # (agents/scene_graph_builder/agent.py::_ensure_agent_node,
-# agents/anticipation/agent.py::_ensure_agent_node) — both write the same
+# each agent's own _ensure_agent_node) — both write the same
 # node_id, so a mismatch would just show as a harmless but confusing label
 # flicker once the redundant internal call lands.
+# Anticipation is deliberately NOT dispatched: docs/agentic_workflow.md's
+# roster has no card for it. Its code still exists under agents/anticipation/
+# and is not deleted — two places will need revisiting if it returns, namely
+# that doc's "three long-running sweeps" line and plan_v2 §6 step 11's
+# anticipation next-phase accuracy in the Benchmark Agent.
 _TOP_LEVEL_AGENTS = (
-    ("agent:monitor_coordinator", "monitor_coordinator", "Monitor Coordinator"),
+    ("agent:error_detection_coordinator", "error_detection_coordinator", "Error Detection Coordinator"),
     ("agent:scene_graph_builder", "scene_graph_builder", "Scene Graph Builder"),
-    ("agent:anticipation", "anticipation", "Anticipation Agent"),
 )
 
 logger = logging.getLogger(__name__)
@@ -72,22 +76,22 @@ logger = logging.getLogger(__name__)
 
 async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, video_id: str) -> None:
     """Writes the ENTIRE static pipeline skeleton — trigger node, all 3
-    top-level agent nodes, Monitor's 3 sub-agent nodes, and every hierarchy
+    top-level agent nodes, Error Detection's 3 sub-agent nodes, and every hierarchy
     edge between them — sequentially, right here, before any agent sweep
     (and therefore any real Gemini call) has been kicked off.
 
     Real bug this fixes: each agent's own internal registration call
-    (agents/monitor/agent.py::_ensure_agent_nodes, scene_graph_builder's/
-    anticipation's own _ensure_agent_node) IS correct and IS the first line
+    (agents/error_detection/agent.py::_ensure_agent_nodes, scene_graph_builder's/
+    each agent's own _ensure_agent_node) IS correct and IS the first line
     of its own sweep — but once dozens of concurrent Gemini calls are in
     flight, those tiny, cheap registration writes (dispatched via
     asyncio.to_thread, sharing Python's default thread pool with whatever
     the Gemini SDK's own blocking I/O uses) can get starved behind
     minutes of long-running Gemini calls queued ahead of them. Confirmed
     directly from real Firestore timestamps this session: an "agent:
-    monitor_temporal -> " hierarchy edge landed nearly 3 minutes after the
+    error_detection_temporal -> " hierarchy edge landed nearly 3 minutes after the
     case opened, even though the code that writes it is the literal first
-    line of monitor_case(). Drawing the static skeleton HERE, before
+    line of error_detection_case(). Drawing the static skeleton HERE, before
     asyncio.gather kicks off any sweep, means it's written while the
     thread pool is still empty — fast and reliable regardless of how busy
     the pool gets once the real per-window work starts.
@@ -96,12 +100,12 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
     idempotent re-writes of the same content) — this function doesn't
     replace that, it just guarantees the skeleton doesn't have to wait for
     it."""
-    trigger_node_id = f"event:workflow-triggered-{case_id}"
+    trigger_node_id = node_ids.trigger(case_id)
     await apply_state_patch(
         case_id,
         node=GraphNodePatch(
             node_id=trigger_node_id,
-            node_type="event",
+            node_type="trigger",
             label=f"Autonomous workflow triggered ({format_video_time_range(start_s, end_s)})",
             attrs={"video_id": video_id},
             source_agent="orchestrator",
@@ -110,6 +114,25 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
         reason="Case opened — user pressed play, autonomous pipeline started",
         source_agent="orchestrator",
         source_tool="open_case",
+    )
+
+    # The patient twin is part of the static skeleton (docs/plan_v2 §6 step 1),
+    # drawn here rather than fetched mid-case: complication reasoning needs it
+    # in its context slice the moment the first error fires, and by then the
+    # thread pool is saturated with Gemini calls.
+    patient_twin_node_id = await write_patient_twin_node(case_id)
+    await apply_state_patch(
+        case_id,
+        edge=GraphEdgePatch(
+            edge_id=node_ids.edge(trigger_node_id, patient_twin_node_id, "hierarchy"),
+            source_node_id=trigger_node_id,
+            target_node_id=patient_twin_node_id,
+            edge_kind="hierarchy",
+            source_agent="orchestrator",
+            source_tool="open_case",
+            reason="Synthetic patient profile loaded for this case",
+        ),
+        reason="Synthetic patient profile loaded for this case",
     )
 
     for target_agent_node_id, target_agent_name, target_agent_label in _TOP_LEVEL_AGENTS:
@@ -130,7 +153,7 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
                 edge_id=f"edge:dispatch-{case_id}-{target_agent_name}",
                 source_node_id=trigger_node_id,
                 target_node_id=target_agent_node_id,
-                edge_kind="action",
+                edge_kind="hierarchy",
                 source_agent="orchestrator",
                 source_tool="open_case",
                 reason=f"Orchestrator dispatched {target_agent_name}",
@@ -141,7 +164,7 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
         )
 
     for sub_node_id, sub_label in SUB_AGENT_LABELS.items():
-        if sub_node_id == "monitor_coordinator":
+        if sub_node_id == "error_detection_coordinator":
             continue
         await apply_state_patch(
             case_id,
@@ -157,15 +180,15 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
         await apply_state_patch(
             case_id,
             edge=GraphEdgePatch(
-                edge_id=f"edge:hierarchy-monitor_coordinator-{sub_node_id}",
-                source_node_id="agent:monitor_coordinator",
+                edge_id=f"edge:hierarchy-error_detection_coordinator-{sub_node_id}",
+                source_node_id="agent:error_detection_coordinator",
                 target_node_id=f"agent:{sub_node_id}",
-                edge_kind="action",
-                source_agent="monitor_coordinator",
+                edge_kind="hierarchy",
+                source_agent="error_detection_coordinator",
                 source_tool="open_case",
-                reason=f"Monitor Coordinator owns {sub_label}",
+                reason=f"Error Detection Coordinator owns {sub_label}",
             ),
-            reason=f"Monitor Coordinator owns {sub_label}",
+            reason=f"Error Detection Coordinator owns {sub_label}",
         )
 
 
@@ -175,9 +198,8 @@ async def open_case(
     """Orchestrator's actual work for opening a case: emits a real
     "workflow triggered" node (the honest marker of the moment the user
     pressed play — not fabricated, not a fake progress indicator), then
-    runs Monitor's live detection, Scene Graph Builder's live
-    entity/relation extraction, AND Anticipation's dead-reckoning phase
-    forecasting over `video_id`, all three concurrently. `start_s`/`end_s`
+    runs Error Detection's live detection and Scene Graph Builder's live
+    entity/relation extraction over `video_id`, concurrently. `start_s`/`end_s`
     default to the video's own real full duration
     (docs/latency_optimization.md: "entire video's inference", not one
     bounded demo window) — `find_video_duration_s` reads this from the
@@ -185,10 +207,7 @@ async def open_case(
 
     Concurrent, not sequential: real measured latency makes running
     independent agents back-to-back a real, unjustified multiplication of
-    demo wait time — they write independent nodes/edges to the same graph
-    (Anticipation's own convergence mechanism is what makes it safe for it
-    to run alongside, not after, the other two — see
-    agents/anticipation/agent.py)."""
+    demo wait time — they write independent nodes/edges to the same graph."""
     if start_s is None:
         start_s = 0.0
     if end_s is None:
@@ -198,10 +217,9 @@ async def open_case(
 
     await _draw_static_hierarchy(case_id, start_s, end_s, video_id)
 
-    divergences, _scene_graph_outputs, _forecasts = await asyncio.gather(
-        monitor_case(case_id, video_id, start_s=start_s, end_s=end_s),
+    divergences, _scene_graph_outputs = await asyncio.gather(
+        error_detection_case(case_id, video_id, start_s=start_s, end_s=end_s),
         scene_graph_case(case_id, video_id, start_s=start_s, end_s=end_s),
-        anticipate_case(case_id, video_id, start_s=start_s, end_s=end_s),
     )
     return divergences
 
@@ -209,9 +227,9 @@ async def open_case(
 class OrchestratorAgent(BaseAgent):
     """Real ADK BaseAgent — root of the agent topology. `sub_agents` is
     declared for Registry/Observability visibility, matching the pattern
-    already established by MonitorCoordinatorAgent: the actual execution
+    already established by ErrorDetectionCoordinatorAgent: the actual execution
     path goes through the plain async function chain (open_case ->
-    monitor_case -> run_monitor_sweep -> the real sub-agents), not by
+    error_detection_case -> run_error_detection_sweep -> the real sub-agents), not by
     re-invoking these declared instances through the ADK runner directly."""
 
     def __init__(self, name: str = "orchestrator"):
@@ -219,14 +237,14 @@ class OrchestratorAgent(BaseAgent):
         # one parent, permanently (confirmed: reusing a shared singleton
         # like scene_graph_builder.agent.AGENT here raises a real pydantic
         # ValidationError the moment OrchestratorAgent is constructed a
-        # second time — the same bug this fixed in MonitorCoordinatorAgent).
+        # second time — the same bug this fixed in ErrorDetectionCoordinatorAgent).
         # Each build_subagent() call here is identically configured to its
         # module's own AGENT singleton, just not the literal same object —
         # fine for Registry visibility, which cares about real
         # configuration, not Python object identity.
         super().__init__(
             name=name,
-            sub_agents=[MonitorCoordinatorAgent(), build_scene_graph_subagent(), build_anticipation_subagent()],
+            sub_agents=[ErrorDetectionCoordinatorAgent(), build_scene_graph_subagent()],
         )
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:

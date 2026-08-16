@@ -2,14 +2,14 @@
 
 Populates the graph with real `entity` nodes (instruments/anatomy) and
 real relation edges — the piece the Living State Graph has been missing
-since Monitor Agent detects divergence but never extracts scene content.
-Runs independently of Monitor (Orchestrator kicks both off concurrently
+since Error Detection Agent detects divergence but never extracts scene content.
+Runs independently of Error Detection (Orchestrator kicks both off concurrently
 over the same real video-duration sweep — see agents/orchestrator/agent.py)
 and streams real-time traceability the same way: every window's real
 findings become visible the moment that window finishes, not batched at
 the end.
 
-Windowing is simple, non-overlapping chunks (not Monitor's heavy-overlap
+Windowing is simple, non-overlapping chunks (not Error Detection's heavy-overlap
 CARES-style windows) — scene composition changes slower than error
 detection needs, and it's meaningfully cheaper.
 
@@ -48,13 +48,13 @@ from tools.video_utils import (
 )
 
 # One static instance, reused across windows (the instruction is role-only,
-# not window-specific — matches Monitor's _SCREEN_AGENTS pattern). Public
+# not window-specific — matches Error Detection's _SCREEN_AGENTS pattern). Public
 # (no leading underscore) since Orchestrator reuses this exact instance
 # for its own sub_agents= declaration, the same "Registry sees the real
-# agent that actually gets invoked" pattern MonitorCoordinatorAgent uses.
+# agent that actually gets invoked" pattern ErrorDetectionCoordinatorAgent uses.
 AGENT = build_subagent()
 
-# Own, separate concurrency budget from Monitor's _GEMINI_CONCURRENCY —
+# Own, separate concurrency budget from Error Detection's _GEMINI_CONCURRENCY —
 # Orchestrator runs both agents' sweeps at the same time over the same
 # real video duration, and each bounds only its own call stream.
 _GEMINI_CONCURRENCY = asyncio.Semaphore(6)
@@ -63,7 +63,7 @@ _GEMINI_CONCURRENCY = asyncio.Semaphore(6)
 # latency pass — native video's per-call cost is dominated by GCS fetch +
 # server-side decode, not clip length, and was a real contributor to
 # nothing meaningful showing on the graph for ~2 minutes of real video
-# playback). Native resolution (no resize) — unlike Monitor's temporal
+# playback). Native resolution (no resize) — unlike Error Detection's temporal
 # role, SGB's job is naming small instruments/anatomy correctly, which
 # benefits from full detail more than it needs motion-dense sampling.
 _STILL_FRAME_COUNT = 5
@@ -150,7 +150,7 @@ async def _ensure_agent_node(case_id: str) -> None:
     rewrite this session dropped it — without it, "Scene Graph Builder"
     never appeared on the graph until its FIRST window's real Gemini call
     returned (via _widen_agent_time_range, which only fires on window
-    completion), unlike Monitor's/Anticipation's own agent nodes, which
+    completion), unlike Error Detection's/Anticipation's own agent nodes, which
     register immediately. Matches those agents' own pattern: idempotent,
     no time range yet (real windows haven't landed)."""
     await apply_state_patch(
@@ -172,7 +172,7 @@ async def _widen_agent_time_range(
     """Widens (never shrinks) the persistent agent node's real cumulative
     time range to cover this window too, re-writing the node's label.
     `agent_range` is a 2-element [min_start, max_end] list (mutable box,
-    since a single Scene Graph Builder agent node — unlike Monitor's four
+    since a single Scene Graph Builder agent node — unlike Error Detection's four
     — doesn't need a dict keyed by node_id)."""
     if not agent_range:
         agent_range[:] = [window_start_s, window_end_s]
@@ -197,7 +197,7 @@ async def _ensure_phase_node(
 ) -> None:
     """Label is the window's own real, live `activity_description` (plan
     §13.4) — Scene Graph Builder's actual output for that window, not the
-    generic `"Phase {id}"` fallback Monitor uses when it has nothing better
+    generic `"Phase {id}"` fallback Error Detection uses when it has nothing better
     to offer. Idempotent — writes once per newly-seen phase, first
     real description wins (harmless if Anticipation's own live naming for
     the same real segment lands first or after; both are equally real,
@@ -256,7 +256,7 @@ async def scene_graph_case(
     """Runs the live Scene Graph Builder sweep over [start_s, end_s) of
     `video_id`, writing real entity nodes and relation edges to the graph
     as each window completes. `async def` — Orchestrator awaits this
-    directly on its own shared event loop, same pattern as monitor_case."""
+    directly on its own shared event loop, same pattern as error_detection_case."""
     await _ensure_agent_node(case_id)
     segments = load_action_segments(video_id)
     fps = find_video_fps(video_id)
@@ -291,7 +291,11 @@ async def scene_graph_case(
                 edge_id=f"edge:sg-{window.window_id}",
                 source_node_id="agent:scene_graph_builder",
                 target_node_id=f"phase:{phase}",
-                edge_kind="action",
+                # Provisional: Phase 1's perception rework replaces this
+                # per-window agent->phase edge with the event stream, where a
+                # phase change is a real perception_event rather than an edge
+                # redrawn every window.
+                edge_kind="detection",
                 source_agent="scene_graph_builder",
                 source_tool="run_scene_graph_window",
                 reason=output.activity_description,
@@ -310,7 +314,10 @@ async def scene_graph_case(
                     edge_id=f"edge:sg-relation-{window.window_id}-{i}",
                     source_node_id=f"entity:{relation.subject_entity_id}",
                     target_node_id=f"entity:{relation.target_entity_id}",
-                    edge_kind="action",
+                    # Provisional, same reason: §7.5 turns relations into
+                    # relation_started/relation_ended events that link to their
+                    # entities via `involved`, rather than a direct edge.
+                    edge_kind="involved",
                     source_agent="scene_graph_builder",
                     source_tool="run_scene_graph_window",
                     reason=relation.verb,

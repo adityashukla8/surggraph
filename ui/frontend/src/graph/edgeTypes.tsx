@@ -1,32 +1,43 @@
 import { BaseEdge, getBezierPath, type EdgeProps, type Edge } from "@xyflow/react";
 import type { CaseGraphEdgeData } from "./types";
-import { agentColorVar, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR } from "./palette";
+import { agentColorVar, DASHED_EDGE_KINDS, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR } from "./palette";
 
 export type CaseFlowEdge = Edge<CaseGraphEdgeData, "caseEdge">;
+
+// Weight encodes how load-bearing an edge is, independent of its color.
+// The two structural kinds that exist in bulk (the case skeleton, and every
+// perception event's link to the entities it involves) are drawn thin and
+// quiet so they never compete with the reasoning chain for attention.
+const STRUCTURAL_KINDS = new Set<CaseGraphEdgeData["edgeKind"]>(["hierarchy", "involved"]);
+
+// A confirmed prediction and a fail-closed gate outcome are the two edges a
+// viewer most needs to catch, so they get the heaviest stroke.
+const EMPHASIZED_KINDS = new Set<CaseGraphEdgeData["edgeKind"]>(["confirmation", "verification"]);
 
 function edgeStyle(data: CaseGraphEdgeData | undefined): React.CSSProperties {
   if (!data) return {};
 
-  if (data.edgeKind === "predicted" && data.confirmationSignal === "refuted") {
+  // A refuted prediction is greyed rather than recolored — it's a hypothesis
+  // that didn't pan out, not an alarm.
+  if (data.confirmationSignal === "refuted") {
     return { stroke: "var(--text-muted)", strokeWidth: 1.5, strokeDasharray: "4 4", opacity: 0.35 };
   }
 
-  switch (data.edgeKind) {
-    case "predicted":
-      return {
-        stroke: agentColorVar(data.sourceAgent),
-        strokeWidth: 1.5,
-        strokeDasharray: "6 4",
-      };
-    case "action":
-      return { stroke: EDGE_KIND_COLOR.action, strokeWidth: 1.5 };
-    case "observed":
-      return { stroke: EDGE_KIND_COLOR.observed, strokeWidth: 3 };
-    case "revised":
-      return { stroke: EDGE_KIND_COLOR.revised, strokeWidth: 3 };
-    default:
-      return { stroke: "var(--text-secondary)", strokeWidth: 1.5 };
-  }
+  const isDashed = DASHED_EDGE_KINDS.has(data.edgeKind);
+
+  // Prediction edges are recolored by the agent that made the prediction —
+  // with several agents forecasting concurrently, "who claimed this" is the
+  // information a viewer actually needs from the line.
+  const stroke = data.edgeKind === "prediction" ? agentColorVar(data.sourceAgent) : EDGE_KIND_COLOR[data.edgeKind];
+
+  const strokeWidth = STRUCTURAL_KINDS.has(data.edgeKind) ? 1 : EMPHASIZED_KINDS.has(data.edgeKind) ? 3 : 1.5;
+
+  return {
+    stroke: stroke ?? "var(--text-secondary)",
+    strokeWidth,
+    ...(isDashed ? { strokeDasharray: "6 4" } : {}),
+    ...(STRUCTURAL_KINDS.has(data.edgeKind) ? { opacity: 0.55 } : {}),
+  };
 }
 
 function CaseEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd }: EdgeProps<CaseFlowEdge>) {
@@ -49,7 +60,7 @@ function CaseEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targ
           <title>{tooltip}</title>
         </path>
       )}
-      {confirmDot && data?.edgeKind === "predicted" && data.confirmationSignal !== "pending" && (
+      {confirmDot && data?.edgeKind === "prediction" && data.confirmationSignal !== "pending" && (
         <circle
           cx={(sourceX + targetX) / 2}
           cy={(sourceY + targetY) / 2}
