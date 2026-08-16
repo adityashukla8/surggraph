@@ -55,6 +55,7 @@ EXPECTED_RELATIONS = [
     ("literature_evidence", "evidence", "complication", "a complication is grounded in retrieved literature"),
     ("complication", "proposal", "corrective_trajectory", "a corrective proposal answers a complication"),
     ("corrective_trajectory", "trajectory_comparison", "divergence_alert", "divergence is measured against the proposal"),
+    ("divergence_alert", "detection", "action_intent", "an unacknowledged divergence proposes an external write"),
     ("error", "hierarchy", "literature_evidence", "papers hang off the error whose investigation retrieved them"),
     ("action_intent", "verification", "verification_block", "every external write passes the fail-closed gate"),
     ("action_intent", "outcome", "action_outcome", "an intent records what really happened"),

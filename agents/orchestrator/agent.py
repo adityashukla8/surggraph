@@ -46,6 +46,7 @@ from google.genai import types
 from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.complication_reasoning import agent as complication_reasoning
 from agents.corrective_replanning import agent as corrective_replanning
+from agents.alert_routing import agent as alert_routing
 from agents.divergence_detection import agent as divergence_detection
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
@@ -81,6 +82,8 @@ _TOP_LEVEL_AGENTS = (
     ("agent:literature_retrieval", "literature_retrieval", "Literature Retrieval"),
     ("agent:corrective_replanning", "corrective_replanning", "Corrective Replanning"),
     ("agent:divergence_detection", "divergence_detection", "Divergence Detection"),
+    ("agent:alert_routing", "alert_routing", "Alert Routing"),
+    ("agent:verification_gate", "verification_gate", "Verification Gate"),
 )
 
 logger = logging.getLogger(__name__)
@@ -290,6 +293,7 @@ async def open_case(
     complication_reasoning.subscribe(bus)
     corrective_replanning.subscribe(bus)
     divergence_detection.subscribe(bus)
+    alert_routing.subscribe(bus)
 
     try:
         divergences, _perception_state = await asyncio.gather(
