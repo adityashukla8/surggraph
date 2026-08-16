@@ -29,8 +29,8 @@ A real end-to-end run means: open a case through `POST /cases/open`, let the swe
 | # | Issue | Impact | Notes |
 |---|---|---|---|
 | O1 | Per-window latency ~15.8s against a 5s window cadence | Graph lags the video substantially; a 90s bounded sweep takes ~5 min wall clock | Dominated by Gemini call time, not writes. Batching already removed the write bottleneck. No fix identified that does not cost accuracy. |
-| O2 | Europe PMC relevance is weak for narrow clinical queries | Complications often come back `evidence_backed=False` — correct behaviour, but ungrounded | Measured: `sort=CITED desc` and dropping the open-access filter both produced *worse* top results. Default ranking is already relevance. Query formulation is the only real lever. |
-| O3 | Alert Executor destination platform undecided | Blocks Phase 3's external write | Explicitly not Slack. Needs a healthcare-relevant destination with a free sandbox and a real API. |
+| O2 | Europe PMC grounding — **substantially improved 2026-08-16, not closed** | Was 0 of N complications grounded, so the verification gate could never pass. Now **7 of 17** in a live case, with 7 real evidence edges | Root cause was query construction, not ranking: Europe PMC ANDs every term, so one long query starves the ranker rather than refining it (608 hits at 4 terms → 1 at 10). Fixed with multi-query fanout plus Reciprocal Rank Fusion — see the fanout entry under Fixed. Remaining gap: whether an alert clears the gate now depends on which complication happens to diverge, since ~60% are still ungrounded. `sort=CITED desc` and dropping the open-access filter were both measured and made results *worse*. |
+
 | O4 | `DEFAULT_THRESHOLD=1.7` never re-tuned | Error detection skews toward false negatives | Confusion matrix in `validation_results.md` shows the skew across two separate runs. Flagged since 2026-08-13. |
 
 ---
@@ -64,6 +64,9 @@ Deviations were measured against the patient's pre-insufflation baseline, but in
 
 **#24 — Corrective action library paraphrased its sources.**
 Two entries claimed to invert an OCHRA indicator but quoted it approximately (`"without repositioning"` vs the real `"without progress"`). Caught by a test that asserts every action quotes a real indicator verbatim — written specifically because the library's honesty rests on that claim.
+
+**#26 — One long literature query returned nothing usable.**
+Europe PMC is a boolean AND system: every term is a clause the paper must literally contain, so a precise-sounding query eliminates the papers it was meant to find. Measured on one real clinical question: 4 terms → 608 hits, 10 terms → 1 hit, and that survivor was a conference abstract book — the only document dense enough to contain every term somewhere. The agent's own instruction was the cause; it told the model to include mechanism and patient specifics, which is exactly what breaks this API. A `broader_query` fallback existed but only fired on *zero* hits, so 66 tangential results counted as success and it never ran. Replaced with multi-query fanout (3–5 short independent queries, hard 4-content-word cap, synonyms as separate queries) merged by Reciprocal Rank Fusion. Field prefixes verified working; MESH turned out far narrower than expected (68 hits for a central term, top result about women undergoing implant explant) so it is offered as at most one query rather than the default.
 
 **#25 — Five near-identical divergence alerts for one event.**
 One error spawned several complications, each produced a proposal, and each proposal independently noticed the same recurrence. Per-proposal deduplication could not catch it since every alert was genuinely the first *for its proposal*. Now also deduplicated by the underlying evidence. 5 → 1 on the following run.

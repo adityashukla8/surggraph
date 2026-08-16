@@ -29,6 +29,15 @@ No ground-truth name legend exists for this dataset, so "was the phase NAME righ
 
 **To reproduce:** the log (`data/validation/anticipation_accuracy.jsonl`) accumulates automatically every time `anticipate_case` runs live (via Orchestrator or a direct test) — nothing to trigger separately. Then `uv run scripts/summarize_anticipation_accuracy.py`.
 
+## Literature grounding rate
+
+The fraction of complication candidates the reasoning agent could tie to a genuinely retrieved paper. Matters because the verification gate refuses to raise an external alert on an ungrounded complication, so this rate bounds how often the system can act at all.
+
+| Date | Retrieval design | Grounded / total | Evidence edges | Notes |
+|---|---|---|---|---|
+| 2026-08-16 (before) | one long query + zero-hit fallback | **0 / N** | 0 | Query construction starved the ranker; see `qa_log.md` #26 |
+| 2026-08-16 (after) | 3–5 short queries, fanout + Reciprocal Rank Fusion | **7 / 17** | 7 | Same bounded 90s case. Gate still blocked all 3 alerts that run, because the complications that happened to diverge were among the ungrounded ones — the path is open, not guaranteed |
+
 ## Test suite
 
 | Date | Command | Result |
