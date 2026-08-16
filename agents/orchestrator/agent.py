@@ -47,7 +47,9 @@ from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.complication_reasoning import agent as complication_reasoning
 from agents.corrective_replanning import agent as corrective_replanning
 from agents.alert_routing import agent as alert_routing
+from agents.benchmark.agent import benchmark_case
 from agents.divergence_detection import agent as divergence_detection
+from agents.documentation.agent import draft_note
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
@@ -309,6 +311,18 @@ async def open_case(
         # it can ever report — which would silently lose exactly the
         # divergences that matter most, the late ones.
         await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
+
+        # Post-case, in order: the case grades itself, then documents itself.
+        # Documentation runs second so the draft can report the benchmark and
+        # tell a reader how much to trust everything above it.
+        try:
+            await benchmark_case(case_id, video_id, start_s, end_s)
+        except Exception:
+            logger.exception("case %s: benchmarking failed — the case still closes", case_id)
+        try:
+            await draft_note(case_id)
+        except Exception:
+            logger.exception("case %s: drafting failed — the case still closes", case_id)
     finally:
         await event_bus.close_bus(case_id)
 

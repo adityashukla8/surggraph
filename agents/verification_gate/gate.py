@@ -185,6 +185,78 @@ def evaluate_divergence_alert(index: GraphIndex, alert_node_id: str) -> GateResu
     return result
 
 
+def evaluate_documentation(index: GraphIndex, documentation_node_id: str) -> GateResult:
+    """Gates a documentation write to the clinical record.
+
+    A different chain from a divergence alert, so a different check set. What
+    makes a note safe to file is not what makes an alert safe to raise: an
+    alert must be grounded in evidence, whereas a note is a record of what the
+    system observed and reasoned — including the parts it could not ground.
+    Requiring evidence here would block honest documentation of an uncertain
+    case, which is the opposite of what a record is for.
+
+    What it does require is that a human approved it, that it says something,
+    and that a reader can tell how much to trust it.
+    """
+    result = GateResult(passed=False)
+
+    doc = index.nodes_by_id.get(documentation_node_id)
+    if not _check(result, "draft_exists", doc is not None, f"{documentation_node_id} is not on the graph"):
+        return result
+
+    sections = doc.attrs.get("sections") or {}
+    if not _check(result, "draft_has_content", bool(sections.get("summary", "").strip()), "the draft has no summary"):
+        return result
+
+    populated = sum(1 for k, v in sections.items() if isinstance(v, str) and v.strip())
+    if not _check(
+        result, "draft_is_substantive", populated >= 4,
+        f"only {populated} sections are populated; this is too thin to file as a record",
+    ):
+        return result
+
+    # The whole point of HITL #2. An unapproved note must never reach the
+    # clinical record, whatever else is true of it.
+    if not _check(
+        result, "surgeon_approved", doc.attrs.get("approval_status") == "approved",
+        f"approval_status is {doc.attrs.get('approval_status')!r}, not 'approved'",
+    ):
+        return result
+
+    # A reader has to be able to weight the content. A note reporting automated
+    # detections with no indication of how that detector actually scored is
+    # asking to be over-trusted.
+    if not _check(
+        result, "case_is_benchmarked", index.nodes_by_id.get(node_ids.benchmark(doc.attrs.get("case_id", ""))) is not None
+        or bool(index.of_type("benchmark")),
+        "no benchmark for this case, so the note reports detections a reader cannot weight",
+    ):
+        return result
+
+    if not _check(
+        result, "limitations_stated", bool(sections.get("limitations")),
+        "the draft states no limitations, so a reader cannot tell what it does not cover",
+    ):
+        return result
+
+    result.passed = True
+    return result
+
+
+async def verify_documentation(case_id: str, action_intent_id: str, documentation_node_id: str) -> GateResult:
+    """Evaluates a documentation write and records the outcome. Same
+    fail-closed contract as the alert path: an exception blocks."""
+    try:
+        index = GraphIndex(await get_state_snapshot(case_id))
+        result = evaluate_documentation(index, documentation_node_id)
+    except Exception as exc:
+        logger.exception("verification[%s]: documentation evaluation failed — blocking", case_id)
+        result = GateResult(passed=False, block_reasons=[f"verification could not be completed: {type(exc).__name__}"])
+
+    await _write_outcome(case_id, action_intent_id, documentation_node_id, result)
+    return result
+
+
 async def verify(case_id: str, action_intent_id: str, alert_node_id: str) -> GateResult:
     """Evaluates a proposed external write and records the outcome on the graph.
 
@@ -200,6 +272,21 @@ async def verify(case_id: str, action_intent_id: str, alert_node_id: str) -> Gat
         logger.exception("verification[%s]: evaluation failed for %s — blocking", case_id, alert_node_id)
         result = GateResult(passed=False, block_reasons=[f"verification could not be completed: {type(exc).__name__}"])
 
+    await _write_outcome(case_id, action_intent_id, alert_node_id, result)
+    logger.info(
+        "verification[%s]: %s for %s — %s",
+        case_id,
+        "PASS" if result.passed else "BLOCK",
+        action_intent_id,
+        result.summary,
+    )
+    return result
+
+
+async def _write_outcome(case_id: str, action_intent_id: str, subject_node_id: str, result: GateResult) -> None:
+    """Records the verdict on the graph. Passes are recorded too — an approved
+    external write with no record of having been checked is as opaque as an
+    unexplained block."""
     node_id = node_ids.verification_block(action_intent_id)
     await apply_state_patches(
         case_id,
@@ -214,7 +301,7 @@ async def verify(case_id: str, action_intent_id: str, alert_node_id: str) -> Gat
                         "checks": result.checks,
                         "block_reasons": result.block_reasons,
                         "action_intent_id": action_intent_id,
-                        "alert_node_id": alert_node_id,
+                        "subject_node_id": subject_node_id,
                     },
                     source_agent=SOURCE_AGENT,
                     source_tool=_SOURCE_TOOL,
@@ -237,12 +324,3 @@ async def verify(case_id: str, action_intent_id: str, alert_node_id: str) -> Gat
             ),
         ],
     )
-
-    logger.info(
-        "verification[%s]: %s for %s — %s",
-        case_id,
-        "PASS" if result.passed else "BLOCK",
-        action_intent_id,
-        result.summary,
-    )
-    return result

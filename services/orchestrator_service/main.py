@@ -26,6 +26,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from agents.hitl.approval import DraftNotFound, record_approval
 from agents.hitl.acknowledgment import (
     NotAProposal,
     ProposalNotFound,
@@ -97,6 +98,28 @@ async def post_open_case(payload: OpenCaseRequest, background_tasks: BackgroundT
 class HitlAcknowledgmentRequest(BaseModel):
     proposal_node_id: str
     outcome: Literal["acknowledged", "dismissed"]
+
+
+class HitlApprovalRequest(BaseModel):
+    outcome: Literal["approved", "rejected", "edited"]
+    edited_sections: dict | None = None
+
+
+@app.post("/cases/{case_id}/hitl/approval")
+async def post_hitl_approval(case_id: str, payload: HitlApprovalRequest) -> dict:
+    """HITL #2 — the surgeon approving, editing or rejecting the operative record.
+
+    Synchronous and end-to-end: approve, gate, file, report. There is no
+    awaiting_approval state to park in, because a coroutine held open for a
+    decision that may take hours does not survive a restart — the draft's own
+    approval_status on the graph is the durable state instead.
+    """
+    try:
+        return await record_approval(case_id, payload.outcome, payload.edited_sections)
+    except DraftNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.post("/cases/{case_id}/hitl/acknowledgment")
