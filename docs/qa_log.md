@@ -119,6 +119,13 @@ The API returns `snippet`, not `abstract`, so the model was receiving titles wit
 
 ## Process issues worth remembering
 
+**A test fixture put a fabricated citation into a public FHIR record (2026-08-16).**
+Verifying the verification gate's *pass* path required a chain the gate would accept, and real runs never produce one because complications keep coming back `evidence_backed=False`. The chain was written by hand — including a literature node with an invented title, journal and year (`"Bladder neck reconstruction outcomes after RARP", J Endourol 2024`) pointed at an arbitrary article id. That alert was written to the public HAPI server and then offered as something to demo.
+
+Two things make this worse than it first looks. The invented id resolved to a **real but entirely unrelated paper** (gastric antrum anatomy), so the citation looked plausible and survived a naive URL check — exactly the failure mode `evidence_backed` and the gate exist to catch. And it happened while testing the component whose only job is refusing ungrounded claims.
+
+Re-verified with a genuinely retrieved paper (`Communication/137353000`, EXT_ID 42195151, confirmed hitCount=1 and on-topic). **Rule going forward: a test fixture may hand-build graph STRUCTURE, but any content that would be presented as evidence must be really retrieved.** Structure is scaffolding; a citation is a claim.
+
 **Backgrounded restarts queued behind long commands killed live test runs twice.** A restart command chained after a two-minute pytest fired long after I had already restarted manually, killing the servers mid-sweep and producing a "stalled" case that looked like a code defect. Restarts now go in their own command.
 
 **Testing agents in isolation is not sufficient.** #11 and #17 both passed direct invocation and both made the system completely non-functional through the UI. A real case opened through the orchestrator is the only test that would have caught either.
