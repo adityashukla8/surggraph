@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ReactFlow, Background, Controls, Panel, useReactFlow } from "@xyflow/react";
+import { onFocusNode, FOCUS_PULSE_MS } from "../../graph/useGraphFocus";
 import "@xyflow/react/dist/style.css";
 import type { CaseFlowNode } from "../../graph/nodeTypes";
 import { nodeTypes } from "../../graph/nodeTypes";
@@ -54,6 +55,40 @@ function InitialFit({ nodeCount }: { nodeCount: number }) {
 }
 
 
+/** Pans to a node when the timeline asks, and pulses it briefly.
+ *
+ * Separate from InitialFit because they answer different questions: that one
+ * frames the whole graph once, this one goes to a specific node on demand and
+ * must not fight the user's own panning at any other time. */
+function FocusOnRequest() {
+  const { setCenter, getNode } = useReactFlow();
+
+  useEffect(
+    () =>
+      onFocusNode((nodeId) => {
+        const node = getNode(nodeId);
+        // A row referencing a node not on screen does nothing, rather than
+        // jumping the viewport somewhere arbitrary.
+        if (!node) return;
+        const w = (node.measured?.width ?? node.width ?? 0) / 2;
+        const h = (node.measured?.height ?? node.height ?? 0) / 2;
+        setCenter(node.position.x + w, node.position.y + h, { zoom: 1.2, duration: 500 });
+
+        // The pulse is a class on the DOM node rather than React state: it is
+        // purely visual and lasts three seconds, and routing it through state
+        // would re-render the entire graph twice for an outline.
+        const el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(nodeId)}"]`);
+        if (!el) return;
+        el.classList.add("case-node--focused");
+        setTimeout(() => el.classList.remove("case-node--focused"), FOCUS_PULSE_MS);
+      }),
+    [setCenter, getNode],
+  );
+
+  return null;
+}
+
+
 function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullscreen }: GraphCanvasProps) {
   return (
     <div className={`tile tile--graph${isFullscreen ? " tile--graph-fullscreen" : ""}`} data-tile="state-graph">
@@ -91,6 +126,7 @@ function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullsc
           >
             <Background />
             <InitialFit nodeCount={nodes.length} />
+            <FocusOnRequest />
             <Controls />
             <Panel position="bottom-right">
               <GraphLegend />

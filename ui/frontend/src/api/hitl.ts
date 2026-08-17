@@ -16,6 +16,33 @@ export function setActiveCaseId(caseId: string | null): void {
   activeCaseId = caseId;
 }
 
+/** HITL #2 — approve, edit or reject the drafted operative record.
+ *
+ * Also the orchestrator, and for a stronger reason than acknowledgment: this
+ * call runs the verification gate and, on a pass, performs the real FHIR
+ * write. The state service's generic manual-event endpoint would record that a
+ * human clicked something and do none of it, so the button would report
+ * success while nothing was filed.
+ */
+export async function approveDocumentation(
+  outcome: "approved" | "rejected" | "edited",
+  editedSections?: Record<string, string>,
+): Promise<{ filed: boolean; detail: string; resource_url?: string }> {
+  if (!activeCaseId) throw new Error("no active case");
+
+  const resp = await fetch(`${ORCHESTRATOR_URL}/cases/${activeCaseId}/hitl/approval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ outcome, edited_sections: editedSections ?? null }),
+  });
+
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`${resp.status}${detail ? `: ${detail.slice(0, 120)}` : ""}`);
+  }
+  return resp.json();
+}
+
 export async function acknowledgeProposal(
   proposalNodeId: string,
   outcome: "acknowledged" | "dismissed",

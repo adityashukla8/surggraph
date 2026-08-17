@@ -4,7 +4,7 @@ import { VideoPanel } from "./components/tiles/VideoPanel";
 import { StateGraphPanel } from "./components/tiles/StateGraphPanel";
 import { EventInputPanel } from "./components/tiles/EventInputPanel";
 import { CaseContextPanel } from "./components/tiles/CaseContextPanel";
-import { ActionLogPanel } from "./components/tiles/ActionLogPanel";
+import { AutonomousActionsPanel } from "./components/tiles/AutonomousActionsPanel";
 import { setActiveCaseId } from "./api/hitl";
 import { useCaseStateStream } from "./graph/useCaseStateStream";
 
@@ -88,7 +88,11 @@ function App() {
         <StateGraphPanel nodes={nodes} edges={edges} status={status} error={error} />
         <EventInputPanel log={log} onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())} />
         <CaseContextPanel caseId={caseId} nodes={nodes.map((n) => n.data.raw)} />
-        <ActionLogPanel log={log} />
+        <AutonomousActionsPanel
+          caseId={caseId}
+          nodes={nodes.map((n) => n.data.raw)}
+          edges={edges.map((e) => ({ source: e.source, target: e.target, edgeKind: e.data?.edgeKind ?? "" }))}
+        />
       </main>
     </div>
   );
