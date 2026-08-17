@@ -1,70 +1,108 @@
 {
-  "_disclosure": "SYNTHETIC. This is an illustrative patient profile authored for this project. It is not derived from any real patient, any real record, or the source video's actual (unknown) patient. Every surface that renders these fields must label them synthetic.",
+  "_disclosure": "SYNTHETIC. Illustrative patient profile authored for this project. Not derived from any real patient, any real record, or the source video's actual (unknown) patient. Values were chosen to represent a technically demanding but entirely plausible RARP candidate, so the elevated-prior markers and the risk summary have something real to show. Every surface that renders these fields must label them synthetic.",
   "_provenance": {
     "kind": "authored_synthetic",
-    "authored_for": "docs/plan_v2_autonomous_safety_system.md §2",
+    "authored_for": "docs/plan_v2_autonomous_safety_system.md \u00a72",
     "basis": "Field set and value ranges chosen to be clinically plausible for a RARP candidate. Not sampled from any dataset."
   },
   "profile_id": "synthetic-rarp-001",
   "display_name": "Synthetic RARP Patient 001",
-
   "demographics": {
     "age_years": 64,
-    "bmi": 28.4
+    "sex": "male",
+    "bmi": 32.1
   },
-
   "anesthetic_risk": {
-    "asa_class": 2,
-    "asa_note": "Mild systemic disease — controlled hypertension, well-controlled type 2 diabetes."
+    "asa_class": 3,
+    "asa_note": "Severe systemic disease \u2014 hypertension, type 2 diabetes, obesity."
   },
-
   "prostate": {
-    "volume_ml": 46,
+    "volume_ml": 85,
     "psa_ng_ml": 7.8,
     "gleason_score": "3+4",
-    "clinical_stage": "cT2b"
+    "clinical_stage": "cT2b",
+    "median_lobe": true,
+    "membranous_urethra_length_mm": 11
   },
-
   "surgical_plan": {
     "procedure": "Robot-assisted laparoscopic radical prostatectomy",
     "nerve_sparing": "bilateral_partial",
     "nerve_sparing_note": "Bilateral partial nerve-sparing intended; right side may be sacrificed if intraoperative findings suggest extracapsular extension.",
     "lymph_node_dissection": "extended_pelvic",
     "positioning": "steep_trendelenburg",
-    "pneumoperitoneum_target_mmhg": 15
+    "pneumoperitoneum_target_mmhg": 15,
+    "prior_turp": true,
+    "prior_pelvic_surgery": false,
+    "prior_radiation": false
   },
-
   "comorbidity_flags": [
     "hypertension",
     "type_2_diabetes",
     "former_smoker",
     "obesity_class_1"
   ],
-
   "risk_flags": [
     {
       "flag": "elevated_bmi",
-      "relevance": "Obesity is associated with longer operative time, harder pelvic exposure, and higher airway pressures under steep Trendelenburg."
+      "relevance": "Longer operative time, harder pelvic exposure, higher airway pressures under steep Trendelenburg."
     },
     {
       "flag": "type_2_diabetes",
-      "relevance": "Associated with impaired wound healing and higher infection risk."
+      "relevance": "Impaired wound healing and higher infection risk."
     },
     {
-      "flag": "enlarged_prostate",
-      "relevance": "Prostate volume above ~40 mL is associated with more difficult bladder-neck dissection."
+      "flag": "large_prostate_with_median_lobe",
+      "relevance": "Distorted, technically demanding bladder-neck dissection."
+    },
+    {
+      "flag": "prior_turp",
+      "relevance": "Scarred bladder neck with obliterated tissue planes."
+    },
+    {
+      "flag": "short_membranous_urethra",
+      "relevance": "Associated with slower continence recovery."
     },
     {
       "flag": "partial_nerve_sparing",
-      "relevance": "Nerve-sparing intent raises the cost of thermal or traction injury near the neurovascular bundle."
+      "relevance": "Raises the cost of thermal or traction injury near the neurovascular bundle."
     }
   ],
-
   "baseline_vitals": {
     "hr_bpm": 68,
     "map_mmhg": 88,
     "spo2_pct": 98,
     "etco2_mmhg": 35,
     "peak_airway_pressure_cmh2o": 18
-  }
+  },
+  "baseline_function": {
+    "preop_continence": "continent",
+    "iief5_score": 18,
+    "iief5_note": "Mild erectile dysfunction (IIEF-5 17\u201321)."
+  },
+  "elevated_priors": [
+    {
+      "field": "demographics.bmi",
+      "reason": "Obesity increases operative time, complicates pelvic exposure, and raises airway pressures under steep Trendelenburg."
+    },
+    {
+      "field": "anesthetic_risk.asa_class",
+      "reason": "ASA 3 indicates severe systemic disease and a higher perioperative risk profile."
+    },
+    {
+      "field": "prostate.volume_ml",
+      "reason": "Prostate volume above ~40 mL is associated with more difficult bladder-neck dissection."
+    },
+    {
+      "field": "prostate.median_lobe",
+      "reason": "A median lobe distorts the bladder neck and complicates its dissection and reconstruction."
+    },
+    {
+      "field": "prostate.membranous_urethra_length_mm",
+      "reason": "Shorter membranous urethra is associated with slower return of continence."
+    },
+    {
+      "field": "surgical_plan.prior_turp",
+      "reason": "Prior TURP scars the bladder neck and obliterates normal tissue planes."
+    }
+  ]
 }

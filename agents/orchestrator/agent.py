@@ -55,7 +55,7 @@ from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
 from state import event_bus, node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
-from tools.patient_twin import load_patient_twin, summarize_for_prompt as summarize_patient_twin
+from tools.patient_twin import load_patient_twin, patient_twin_attrs
 from tools.state_tools import apply_state_patch, apply_state_patches
 from tools.video_utils import SWEEP_END_S, SWEEP_START_S, find_video_duration_s, format_video_time_range
 
@@ -143,12 +143,7 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
                 node_id=patient_twin_node_id,
                 node_type="patient_twin",
                 label=f"{profile['display_name']} (synthetic)",
-                attrs={
-                    "synthetic": True,
-                    "disclosure": profile["_disclosure"],
-                    "profile": profile,
-                    "prompt_summary": summarize_patient_twin(profile),
-                },
+                attrs=patient_twin_attrs(profile),
                 source_agent="orchestrator",
                 source_tool="open_case",
             ),

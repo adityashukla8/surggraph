@@ -43,6 +43,76 @@ def load_patient_twin() -> dict[str, Any]:
     return _cache
 
 
+def damico_risk(profile: dict[str, Any] | None = None) -> str:
+    """D'Amico risk group, DERIVED from PSA, Gleason and clinical stage.
+
+    Not a stored field, because storing it would let it drift out of step with
+    the three values it is defined by. The criteria are the published ones
+    (D'Amico et al., JAMA 1998): high if PSA > 20 or Gleason >= 8 or stage
+    >= T2c; intermediate if PSA 10-20 or Gleason 7 or T2b; low otherwise.
+    """
+    p = profile or load_patient_twin()
+    psa = p["prostate"]["psa_ng_ml"]
+    gleason = p["prostate"]["gleason_score"]
+    stage = p["prostate"]["clinical_stage"].lower().removeprefix("c")
+    primary, _, secondary = gleason.partition("+")
+    gleason_sum = int(primary) + int(secondary or 0)
+
+    if psa > 20 or gleason_sum >= 8 or stage >= "t2c":
+        return "high"
+    if psa >= 10 or gleason_sum == 7 or stage == "t2b":
+        return "intermediate"
+    return "low"
+
+
+def elevated_prior_fields(profile: dict[str, Any] | None = None) -> dict[str, str]:
+    """{dotted field path: why it matters}. Declared in the profile data rather
+    than decided in the UI, so the marker dots and the risk summary read from
+    one place and cannot disagree."""
+    p = profile or load_patient_twin()
+    return {e["field"]: e["reason"] for e in p.get("elevated_priors", [])}
+
+
+def risk_profile_summary(profile: dict[str, Any] | None = None) -> str:
+    """Two or three sentences naming the clinically meaningful priors.
+
+    Composed from the profile's own declared elevated priors rather than
+    written out as fixed prose, so editing the patient changes the summary
+    instead of leaving a stale sentence describing a patient who no longer
+    exists. Deterministic — no model call for a sentence about static data.
+    """
+    p = profile or load_patient_twin()
+    priors = {e["field"] for e in p.get("elevated_priors", [])}
+
+    difficulty = []
+    if "prostate.volume_ml" in priors:
+        difficulty.append(f"large prostate volume ({p['prostate']['volume_ml']} mL)")
+    if "prostate.median_lobe" in priors:
+        difficulty.append("median lobe")
+    if "surgical_plan.prior_turp" in priors:
+        difficulty.append("prior TURP")
+    if "demographics.bmi" in priors:
+        difficulty.append(f"BMI {p['demographics']['bmi']}")
+
+    sentences = []
+    if difficulty:
+        sentences.append(f"Elevated technical difficulty: {', '.join(difficulty)}.")
+
+    anastomosis = []
+    if "prostate.membranous_urethra_length_mm" in priors:
+        anastomosis.append(f"short membranous urethra ({p['prostate']['membranous_urethra_length_mm']} mm)")
+    if p["surgical_plan"]["nerve_sparing"].startswith("bilateral"):
+        anastomosis.append("bilateral nerve-sparing intent")
+    if anastomosis:
+        sentences.append(f"{', '.join(anastomosis).capitalize()} raises anastomosis complexity and continence risk.")
+
+    if "anesthetic_risk.asa_class" in priors:
+        sentences.append(f"ASA {p['anesthetic_risk']['asa_class']} — reduced physiological reserve.")
+
+    # An honest empty state rather than a reassuring sentence nobody checked.
+    return " ".join(sentences) or "No elevated technical-difficulty priors recorded for this patient."
+
+
 def summarize_for_prompt(profile: dict[str, Any] | None = None) -> str:
     """A compact prose rendering for reasoning prompts.
 
@@ -65,8 +135,36 @@ def summarize_for_prompt(profile: dict[str, Any] | None = None) -> str:
         f"Planned: {plan['procedure']} with {plan['nerve_sparing'].replace('_', ' ')} nerve-sparing and "
         f"{plan['lymph_node_dissection'].replace('_', ' ')} lymph node dissection, "
         f"{plan['positioning'].replace('_', ' ')} positioning at {plan['pneumoperitoneum_target_mmhg']} mmHg pneumoperitoneum. "
-        f"Comorbidities: {flags}."
+        f"Comorbidities: {flags}. "
+        f"D'Amico risk group: {damico_risk(p)}. "
+        f"Elevated priors the reasoning layer should weigh: "
+        f"{'; '.join(e['reason'] for e in p.get('elevated_priors', [])) or 'none recorded'}"
     )
+
+
+def patient_twin_attrs(profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Everything the twin node carries.
+
+    Extracted because the orchestrator builds the twin node inline as part of
+    its batched skeleton write, while this module has its own writer — and the
+    two silently drifted: derived fields added here never reached the graph,
+    because the path that actually runs was the other one. One builder now, so
+    that cannot recur.
+    """
+    p = profile or load_patient_twin()
+    return {
+        # Carried on the node itself so any consumer — UI panel, context slice,
+        # documentation draft — sees the disclosure without having to look it up.
+        "synthetic": True,
+        "disclosure": p["_disclosure"],
+        "profile": p,
+        "prompt_summary": summarize_for_prompt(p),
+        # Derived once here rather than in each consumer, so the panel, the
+        # reasoning prompts and the operative note cannot disagree.
+        "damico_risk": damico_risk(p),
+        "elevated_prior_fields": elevated_prior_fields(p),
+        "risk_profile_summary": risk_profile_summary(p),
+    }
 
 
 async def write_patient_twin_node(case_id: str) -> str:
@@ -86,15 +184,7 @@ async def write_patient_twin_node(case_id: str) -> str:
             node_id=node_id,
             node_type="patient_twin",
             label=f"{profile['display_name']} (synthetic)",
-            attrs={
-                # Carried on the node itself so any consumer — UI panel, context
-                # slice, documentation draft — sees the disclosure without
-                # having to know to look it up.
-                "synthetic": True,
-                "disclosure": profile["_disclosure"],
-                "profile": profile,
-                "prompt_summary": summarize_for_prompt(profile),
-            },
+            attrs=patient_twin_attrs(profile),
             source_agent="orchestrator",
             source_tool="write_patient_twin_node",
         ),

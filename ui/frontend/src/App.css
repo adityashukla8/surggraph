@@ -441,3 +441,215 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
+
+/* --- Case Context panel ---------------------------------------------------
+   Deliberately quiet: this sits beside the graph and the alerts panel, both of
+   which legitimately demand attention. Neutral tones, no motion, generous
+   whitespace. It should read as background. */
+
+.tile__subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.case-context {
+  gap: 0;
+  font-size: 11px;
+  overflow-y: auto;
+}
+
+/* Sticky so a viewer cannot scroll past the disclosure and then read the
+   values below it as a real record. */
+.case-context__synthetic-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -2px -2px 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--status-warning) 16%, var(--surface-1));
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+}
+
+.case-context__identity {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 2px 2px 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.case-context__identity > :first-child {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.case-context__elapsed {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.case-context__group {
+  border-bottom: 1px solid var(--border);
+  padding: 5px 0;
+}
+
+.case-context__group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+.case-context__group-header::-webkit-details-marker {
+  display: none;
+}
+
+/* The collapsed one-line summary. Hidden while open so the group header does
+   not duplicate what the rows underneath already say. */
+.case-context__group-summary {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+
+.case-context__group[open] .case-context__group-summary {
+  display: none;
+}
+
+.case-context__group-body {
+  padding: 4px 0 2px;
+}
+
+.case-context__field {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 1.5px 0;
+  line-height: 1.5;
+}
+
+.case-context__field-label {
+  color: var(--text-muted);
+}
+
+.case-context__field-value {
+  color: var(--text-primary);
+  text-align: right;
+}
+
+/* Subtle marker, not a warning icon — these are priors the reasoning layer
+   weighs, not alarms. */
+.case-context__prior-dot {
+  margin-left: 5px;
+  color: var(--status-warning);
+  font-size: 8px;
+  cursor: help;
+  vertical-align: middle;
+}
+
+.case-context__risk {
+  margin: 8px 0;
+  padding: 7px 8px;
+  border-radius: 4px;
+  background: var(--page);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.case-context__risk-header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+}
+
+.case-context__vitals {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.case-context__vitals-header {
+  cursor: default;
+  margin-bottom: 4px;
+}
+
+.case-context__excursion {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 9.5px;
+  color: var(--status-warning);
+}
+
+.case-context__vital {
+  display: grid;
+  grid-template-columns: 34px 34px 42px 1fr 12px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.case-context__vital-label {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.case-context__vital-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.case-context__vital-unit {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.case-context__vital-trend {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Deviated state carries a colour AND a dot AND heavier weight, so it survives
+   a colourblind viewer or a greyscale screenshot. */
+.case-context__vital--deviated .case-context__vital-value {
+  color: var(--status-warning);
+  font-weight: 700;
+}
+
+.case-context__vital-dot {
+  font-size: 7px;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.case-context__sparkline {
+  display: block;
+}
+
+.case-context__spark--normal {
+  stroke: var(--baseline);
+}
+
+.case-context__spark--deviated {
+  stroke: var(--status-warning);
+}
+
+.case-context__sparkline-empty {
+  color: var(--text-muted);
+  font-size: 10px;
+}

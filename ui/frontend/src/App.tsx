@@ -3,7 +3,7 @@ import "./App.css";
 import { VideoPanel } from "./components/tiles/VideoPanel";
 import { StateGraphPanel } from "./components/tiles/StateGraphPanel";
 import { EventInputPanel } from "./components/tiles/EventInputPanel";
-import { RetrievalPanel } from "./components/tiles/RetrievalPanel";
+import { CaseContextPanel } from "./components/tiles/CaseContextPanel";
 import { ActionLogPanel } from "./components/tiles/ActionLogPanel";
 import { setActiveCaseId } from "./api/hitl";
 import { useCaseStateStream } from "./graph/useCaseStateStream";
@@ -87,7 +87,7 @@ function App() {
         <VideoPanel videoUrl={RAW_VIDEO_URL} onPlay={handleFirstPlay} />
         <StateGraphPanel nodes={nodes} edges={edges} status={status} error={error} />
         <EventInputPanel log={log} onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())} />
-        <RetrievalPanel log={log} />
+        <CaseContextPanel caseId={caseId} nodes={nodes.map((n) => n.data.raw)} />
         <ActionLogPanel log={log} />
       </main>
     </div>
