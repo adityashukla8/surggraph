@@ -37,8 +37,19 @@ interface Props {
   edges: TimelineEdge[];
 }
 
-type Severity = "info" | "moderate" | "high";
-type ItemKind = "proposal" | "alert" | "documentation";
+type Severity = "low" | "medium" | "high";
+type ItemKind = "proposal" | "alert" | "documentation" | "benchmark";
+
+/** The category label shown as a pastel tag. Colours follow the graph's own
+ *  node-kind palette so an item here and its node there read as the same
+ *  thing — yellow for corrective proposals, red for divergence, blue for the
+ *  record, brown for the post-case scorecard. */
+const KIND_LABEL: Record<ItemKind, string> = {
+  proposal: "Corrective Proposal",
+  alert: "Divergence Alert",
+  documentation: "Operative Note",
+  benchmark: "Self-Benchmark",
+};
 
 interface TimelineItem {
   id: string;
@@ -50,7 +61,7 @@ interface TimelineItem {
   node: GraphNodePatch;
 }
 
-const KIND_ICON: Record<ItemKind, string> = { proposal: "⇢", alert: "⚠", documentation: "▤" };
+const KIND_ICON: Record<ItemKind, string> = { proposal: "⇢", alert: "⚠", documentation: "▤", benchmark: "▦" };
 
 function timeOf(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -93,7 +104,7 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         id: n.node_id,
         kind: "proposal",
         at: n.timestamp,
-        severity: a.urgency === "immediate" ? "high" : "moderate",
+        severity: a.urgency === "immediate" ? "high" : "medium",
         summary: `Corrective proposal · ${n.label}`,
         outcome: ack ? `${ack === "acknowledged" ? "Acknowledged" : "Dismissed"} ${a.acknowledged_at ? timeOf(a.acknowledged_at as string) : ""}`.trim() : null,
         node: n,
@@ -118,7 +129,7 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         id: n.node_id,
         kind: "documentation",
         at: n.timestamp,
-        severity: "info",
+        severity: "low",
         summary: "Operative note ready for review",
         outcome:
           status && status !== "pending"
@@ -126,6 +137,22 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
               ? "Approved — filed to FHIR"
               : "Rejected — nothing written"
             : null,
+        node: n,
+      });
+    }
+
+    if (n.node_type === "benchmark") {
+      const f1 = Number(a.macro_f1 ?? 0);
+      const vs = Number(a.vs_cares ?? 0);
+      items.push({
+        id: n.node_id,
+        kind: "benchmark",
+        at: n.timestamp,
+        // Informational: this is a result to read, not something needing a
+        // decision. Its importance is in the number, not in an urgency level.
+        severity: "low",
+        summary: `Case self-graded · macro-F1 ${f1.toFixed(3)} (${vs >= 0 ? "+" : ""}${vs.toFixed(3)} vs CARES)`,
+        outcome: null,
         node: n,
       });
     }
@@ -142,7 +169,7 @@ function attentionState(items: TimelineItem[]) {
   const pendingProposals = items.filter((i) => i.kind === "proposal" && !i.outcome);
 
   if (unackAlerts.length) return { tone: "high" as const, text: "Divergence alert · unacknowledged", count: unackAlerts.length };
-  if (pendingDocs.length) return { tone: "info" as const, text: "Documentation awaiting review", count: pendingDocs.length };
+  if (pendingDocs.length) return { tone: "doc" as const, text: "Documentation awaiting review", count: pendingDocs.length };
   if (pendingProposals.length)
     return {
       tone: "moderate" as const,
@@ -263,14 +290,18 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
               return (
                 <div key={item.id} className={`aa__item aa__item--${item.severity}${item.outcome ? " aa__item--resolved" : ""}`}>
                   <button className="aa__row" onClick={() => setOpenId(open ? null : item.id)}>
-                    <span className="aa__time">{timeOf(item.at)}</span>
-                    <span className={`aa__dot aa__dot--${item.severity}`}>●</span>
-                    <span className="aa__icon">{KIND_ICON[item.kind]}</span>
+                    <span className="aa__row-tags">
+                      <span className="aa__time">{timeOf(item.at)}</span>
+                      <span className={`aa__tag aa__tag--${item.kind}`}>
+                        {KIND_ICON[item.kind]} {KIND_LABEL[item.kind]}
+                      </span>
+                      <span className={`aa__sev aa__sev--${item.severity}`}>{item.severity}</span>
+                      <span className="aa__chevron">{open ? "▾" : "▸"}</span>
+                    </span>
                     <span className="aa__summary">
                       {item.summary}
                       {item.outcome && <span className="aa__outcome"> · {item.outcome}</span>}
                     </span>
-                    <span className="aa__chevron">{open ? "▾" : "▸"}</span>
                   </button>
 
                   {open && (
@@ -287,6 +318,7 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                         />
                       )}
                       {item.kind === "alert" && <AlertDetail item={item} nodeById={nodeById} nodes={nodes} edges={edges} />}
+                      {item.kind === "benchmark" && <BenchmarkDetail item={item} nodes={nodes} edges={edges} />}
                       {item.kind === "documentation" && (
                         <DocumentationDetail
                           item={item}
@@ -501,6 +533,81 @@ function DocumentationDetail({
         </div>
       )}
       {error && <div className="aa__error">{error}</div>}
+    </>
+  );
+}
+
+
+function BenchmarkDetail({
+  item,
+  nodes,
+  edges,
+}: {
+  item: TimelineItem;
+  nodes: GraphNodePatch[];
+  edges: TimelineEdge[];
+}) {
+  const a = item.node.attrs ?? {};
+  const counts = (a.category_counts_unscored ?? {}) as Record<string, number>;
+  // Which error nodes this scorecard actually graded — the grading edges, so
+  // the number traces to what produced it rather than being an assertion.
+  const gradedIds = new Set(edges.filter((e) => e.edgeKind === "grading" && e.target === item.node.node_id).map((e) => e.source));
+  const graded = nodes.filter((n) => gradedIds.has(n.node_id));
+
+  return (
+    <>
+      <p className="aa__framing">
+        The case graded its own detections against ground truth at close. {String(a.n ?? 0)} windows scored.
+      </p>
+
+      <div className="aa__scorecard">
+        <div className="aa__score-main">
+          <span className="aa__score-value">{Number(a.macro_f1 ?? 0).toFixed(3)}</span>
+          <span className="aa__score-label">macro-F1</span>
+        </div>
+        <div className="aa__score-vs">
+          {Number(a.vs_cares ?? 0) >= 0 ? "+" : ""}
+          {Number(a.vs_cares ?? 0).toFixed(3)} vs CARES published {String(a.cares_published_macro_f1 ?? "")}
+        </div>
+      </div>
+
+      <div className="aa__confusion">
+        {(["tp", "fp", "fn", "tn"] as const).map((k) => (
+          <span key={k}>
+            <b>{String(a[k] ?? 0)}</b> {k}
+          </span>
+        ))}
+      </div>
+
+      <div className="aa__section-label">Detections graded</div>
+      <div className="aa__trail">
+        {graded.length ? (
+          graded.slice(0, 6).map((n, i) => (
+            <span key={n.node_id}>
+              {i > 0 && " · "}
+              <GraphLink nodeId={n.node_id}>{n.label}</GraphLink>
+            </span>
+          ))
+        ) : (
+          <span className="aa__empty">No error nodes were graded.</span>
+        )}
+        {graded.length > 6 && <span className="aa__citation-meta"> +{graded.length - 6} more</span>}
+      </div>
+
+      {Object.keys(counts).length > 0 && (
+        <>
+          <div className="aa__section-label">Categories fired — descriptive, not scored</div>
+          <div className="aa__trail">
+            {Object.entries(counts)
+              .map(([k, v]) => `${k.replace(/_/g, " ")} ×${v}`)
+              .join(" · ")}
+          </div>
+        </>
+      )}
+
+      {/* Why there is no per-category score. Stated on the surface rather than
+          left for someone to wonder about a missing breakdown. */}
+      <div className="aa__provenance">{String(a.axis_note ?? "")}</div>
     </>
   );
 }
