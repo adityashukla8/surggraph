@@ -19,8 +19,11 @@ actually processed) — not just phase/event nodes as before.
 
 from __future__ import annotations
 
+import logging
+
 from agents.error_detection.coordinator import ErrorDetectionWindowAssessment, build_divergence_events, run_error_detection_sweep
 from agents.error_detection.aggregation import DEFAULT_THRESHOLD
+from agents.error_detection.phase_link import link_error
 from agents.error_detection.severity import assess
 from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
@@ -28,7 +31,21 @@ from tools.action_labels import load_action_segments, phase_at_frame
 from tools.state_tools import apply_state_patch, get_state_snapshot
 from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_time, format_video_time_range
 
+logger = logging.getLogger(__name__)
+
 _COORDINATOR_NODE_ID = "agent:error_detection_coordinator"
+
+# The deterministic consensus step the three role sub-agents feed into.
+#
+# It is a real stage in the pipeline, not a label: aggregation.py computes a
+# weighted sum of the three roles' independent calls and requires at least two
+# of three above threshold before anything fires. Giving it a node turns the
+# topology into what actually happens — coordinator dispatches three roles,
+# the three roles feed one consensus step, the consensus step produces errors —
+# instead of every sub-agent and every error hanging off the coordinator, which
+# drew a hub with a dozen spokes and hid the sequence.
+_AGGREGATION_NODE_ID = "agent:error_detection_aggregation"
+_AGGREGATION_SOURCE_AGENT = "error_detection_aggregation"
 
 # Error Detection deliberately writes NO phase nodes. Its sub-agents reason
 # about error categories, not phase identity, so it has no semantic description
@@ -159,15 +176,17 @@ async def error_detection_case(
         # "top" category's assessments — see coordinator.py's
         # ErrorDetectionWindowAssessment docstring for why only one set is surfaced
         # here even though all 6 categories were really checked.)
+        # Each role's real reasoning for this window becomes an edge into the
+        # consensus step it actually feeds — visible whether or not the window
+        # fired, so the graph traces what every agent is doing rather than only
+        # the final verdict.
         for sub in assessment.sub_agent_assessments:
             await apply_state_patch(
                 case_id,
                 edge=GraphEdgePatch(
-                    # Same fix: point at the coordinator, which really
-                    # exists, rather than a phase id in a format nobody writes.
-                    edge_id=node_ids.edge(f"agent:error_detection_{sub.agent_role}", _COORDINATOR_NODE_ID, "detection"),
-                    source_node_id=f"agent:error_detection_{sub.agent_role}",
-                    target_node_id=_COORDINATOR_NODE_ID,
+                    edge_id=node_ids.edge(node_ids.agent(f"error_detection_{sub.agent_role}"), _AGGREGATION_NODE_ID, "detection"),
+                    source_node_id=node_ids.agent(f"error_detection_{sub.agent_role}"),
+                    target_node_id=_AGGREGATION_NODE_ID,
                     edge_kind="detection",
                     source_agent=f"error_detection_{sub.agent_role}",
                     source_tool="run_error_detection_window",
@@ -236,8 +255,8 @@ async def error_detection_case(
                     # dropped by the renderer and every error node floated
                     # disconnected. The coordinator node is drawn in the static
                     # skeleton before any sweep starts, so it always exists.
-                    edge_id=node_ids.edge(_COORDINATOR_NODE_ID, event_node_id, "detection"),
-                    source_node_id=_COORDINATOR_NODE_ID,
+                    edge_id=node_ids.edge(_AGGREGATION_NODE_ID, event_node_id, "detection"),
+                    source_node_id=_AGGREGATION_NODE_ID,
                     target_node_id=event_node_id,
                     edge_kind="detection",
                     source_agent="error_detection_coordinator",
@@ -246,6 +265,16 @@ async def error_detection_case(
                 ),
                 reason=divergence.reasoning_trace,
             )
+
+            # Link the error to the activity it happened during, if perception
+            # has already observed that window. Best-effort and guarded: the
+            # two sweeps run independently, anything missed here is picked up
+            # by the reconciliation pass at case close, and a failure must
+            # never take down a detection that already succeeded.
+            try:
+                await link_error(case_id, event_node_id, video_time_s)
+            except Exception:
+                logger.exception("error_detection[%s]: could not link %s to an activity", case_id, event_node_id)
 
     await run_error_detection_sweep(
         video_id, start_s=start_s, end_s=end_s, window_s=window_s, stride_s=window_s, on_window_complete=on_window_complete

@@ -86,7 +86,12 @@ function App() {
       <main className="dashboard__grid">
         <VideoPanel videoUrl={RAW_VIDEO_URL} onPlay={handleFirstPlay} />
         <StateGraphPanel nodes={nodes} edges={edges} status={status} error={error} />
-        <EventInputPanel log={log} onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())} />
+        <EventInputPanel
+          log={log}
+          nodes={nodes.map((n) => n.data.raw)}
+          edges={edges.map((e) => ({ source: e.source, target: e.target, edgeKind: e.data?.edgeKind ?? "" }))}
+          onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())}
+        />
         <CaseContextPanel caseId={caseId} nodes={nodes.map((n) => n.data.raw)} />
         <AutonomousActionsPanel
           caseId={caseId}

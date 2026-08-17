@@ -148,7 +148,16 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
 
       setLog((prev) =>
         [
-          { event_id: event.event_id, timestamp: event.timestamp, source_agent: event.source_agent, source_tool: event.source_tool, reason: event.reason },
+          {
+            event_id: event.event_id,
+            timestamp: event.timestamp,
+            source_agent: event.source_agent,
+            source_tool: event.source_tool,
+            reason: event.reason,
+            nodeId: event.node?.node_id,
+            nodeType: event.node?.node_type,
+            videoTimeS: typeof event.node?.attrs?.video_time_s === "number" ? (event.node.attrs.video_time_s as number) : undefined,
+          },
           ...prev,
         ].slice(0, 200),
       );

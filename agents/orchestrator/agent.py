@@ -50,6 +50,7 @@ from agents.alert_routing import agent as alert_routing
 from agents.benchmark.agent import benchmark_case
 from agents.divergence_detection import agent as divergence_detection
 from agents.documentation.agent import draft_note
+from agents.error_detection import phase_link
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
@@ -196,6 +197,46 @@ async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, vid
         )
 
     coordinator_node_id = node_ids.agent("error_detection_coordinator")
+
+    # The consensus step the three role sub-agents feed into. Drawn here with
+    # everything else so the edges into and out of it can never precede it.
+    aggregation_node_id = node_ids.agent("error_detection_aggregation")
+    patches.append(
+        (
+            GraphNodePatch(
+                node_id=aggregation_node_id,
+                node_type="agent",
+                label="Weighted Aggregation (≥2-of-3)",
+                attrs={
+                    "role": "deterministic_consensus",
+                    "note": (
+                        "Weighted sum of the three role sub-agents' independent calls; at least two of "
+                        "three must clear the threshold before an error fires. No model call."
+                    ),
+                },
+                source_agent="error_detection_aggregation",
+                source_tool="open_case",
+            ),
+            None,
+            "Weighted aggregation step registered for this case",
+        )
+    )
+    patches.append(
+        (
+            None,
+            GraphEdgePatch(
+                edge_id=node_ids.edge(coordinator_node_id, aggregation_node_id, "hierarchy"),
+                source_node_id=coordinator_node_id,
+                target_node_id=aggregation_node_id,
+                edge_kind="hierarchy",
+                source_agent="error_detection_coordinator",
+                source_tool="open_case",
+                reason="Error Detection Coordinator owns the aggregation step",
+            ),
+            "Error Detection Coordinator owns the aggregation step",
+        )
+    )
+
     for sub_node_id, sub_label in SUB_AGENT_LABELS.items():
         if sub_node_id == "error_detection_coordinator":
             continue
@@ -306,6 +347,13 @@ async def open_case(
         # it can ever report — which would silently lose exactly the
         # divergences that matter most, the late ones.
         await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
+
+        # Both sweeps are done, so every phase node now exists — link any
+        # errors that were written before perception had observed their window.
+        try:
+            await phase_link.reconcile(case_id)
+        except Exception:
+            logger.exception("case %s: activity linking failed — the case still closes", case_id)
 
         # Post-case, in order: the case grades itself, then documents itself.
         # Documentation runs second so the draft can report the benchmark and

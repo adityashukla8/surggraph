@@ -44,6 +44,7 @@ const NODE_GROUPS: { heading: string; rows: NodeRow[] }[] = [
   {
     heading: "Case",
     rows: [
+      { kind: "trigger", label: "Case opened — everything hangs off this" },
       { kind: "agent", label: "Agent — icon color = which agent" },
       { kind: "patient_twin", label: "Patient profile (synthetic)" },
       { kind: "manual_event", label: "Human-entered note" },

@@ -132,4 +132,10 @@ export interface ReasoningLogEntry {
   source_agent: string;
   source_tool: string;
   reason: string;
+  /** The node this event wrote, when it wrote one. Carried so a log row can
+   *  show the case's own video time and category rather than only wall-clock
+   *  time and a raw agent name. */
+  nodeId?: string;
+  nodeType?: NodeType;
+  videoTimeS?: number;
 }
