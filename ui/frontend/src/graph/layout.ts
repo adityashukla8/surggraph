@@ -1,7 +1,8 @@
 import dagre from "@dagrejs/dagre";
 import type { CaseFlowNode } from "./nodeTypes";
 import type { CaseFlowEdge } from "./edgeTypes";
-import { measureNodeWidth, NODE_HEIGHT, NODE_HEIGHT_WITH_CONTROLS } from "./measureLabel";
+import { measureNodeWidth, metaRowWidth, NODE_HEIGHT, NODE_HEIGHT_WITH_CONTROLS } from "./measureLabel";
+import { NODE_TYPE_LABEL } from "./palette";
 
 // Auto-layout, left-to-right so the case reads as a timeline — which is also
 // what plan_v2 §4.3's "every node ordered by timestamp" wants visually.
@@ -25,7 +26,24 @@ export function layoutGraph(nodes: CaseFlowNode[], edges: CaseFlowEdge[]): CaseF
   const widths = new Map<string, number>();
   const heights = new Map<string, number>();
   for (const node of nodes) {
-    const width = measureNodeWidth(node.data.label);
+    // Every node now carries a kind tag, so the meta row is always present and
+    // can be the wider of the two rows on a short-labelled node.
+    const width = measureNodeWidth(
+      node.data.label,
+      metaRowWidth(
+        NODE_TYPE_LABEL[node.data.nodeType] ?? node.data.nodeType,
+        node.data.severityBand,
+        node.data.confidence !== undefined,
+        Boolean(node.data.confirmationSignal),
+        // Mirrors CaseNode's caret exactly, including the count, so a node that
+        // collapses to "> 14" gets the width that string really needs.
+        (node.data.childCount ?? 0) > 0
+          ? node.data.collapsed
+            ? `> ${node.data.hiddenCount ?? 0}`
+            : "v"
+          : undefined,
+      ),
+    );
     // A live proposal renders an acknowledge/dismiss row and is taller.
     const height =
       node.data.nodeType === "corrective_trajectory" && !node.data.raw.attrs.escalated

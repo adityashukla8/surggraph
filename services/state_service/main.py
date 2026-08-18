@@ -98,8 +98,11 @@ async def post_patch_batch(case_id: str, incoming: list[StateDiffEvent]) -> list
 
 
 @app.get("/state/{case_id}/stream")
-async def stream(case_id: str, request: Request) -> EventSourceResponse:
-    queue, watch = await store.subscribe(case_id)
+async def stream(case_id: str, request: Request, since_seq: int | None = None) -> EventSourceResponse:
+    """`since_seq` is the resume point — pass the seq of the snapshot you just
+    fetched. Omitting it re-opens the snapshot/stream gap documented on
+    store.subscribe(); it stays optional only so an ad-hoc curl still works."""
+    queue, watch = await store.subscribe(case_id, since_seq=since_seq)
 
     async def event_generator():
         try:

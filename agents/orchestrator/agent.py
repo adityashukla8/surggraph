@@ -50,7 +50,6 @@ from agents.alert_routing import agent as alert_routing
 from agents.benchmark.agent import benchmark_case
 from agents.divergence_detection import agent as divergence_detection
 from agents.documentation.agent import draft_note
-from agents.error_detection import phase_link
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
 from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
@@ -347,13 +346,6 @@ async def open_case(
         # it can ever report — which would silently lose exactly the
         # divergences that matter most, the late ones.
         await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
-
-        # Both sweeps are done, so every phase node now exists — link any
-        # errors that were written before perception had observed their window.
-        try:
-            await phase_link.reconcile(case_id)
-        except Exception:
-            logger.exception("case %s: activity linking failed — the case still closes", case_id)
 
         # Post-case, in order: the case grades itself, then documents itself.
         # Documentation runs second so the draft can report the benchmark and

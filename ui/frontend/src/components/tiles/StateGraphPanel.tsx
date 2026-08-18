@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ReactFlow, Background, Controls, Panel, useReactFlow } from "@xyflow/react";
 import { onFocusNode, FOCUS_PULSE_MS } from "../../graph/useGraphFocus";
+import { toggleCollapse } from "../../graph/useGraphCollapse";
 import "@xyflow/react/dist/style.css";
 import type { CaseFlowNode } from "../../graph/nodeTypes";
 import { nodeTypes } from "../../graph/nodeTypes";
@@ -123,6 +124,13 @@ function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullsc
             edgeTypes={edgeTypes}
             fitView
             proOptions={{ hideAttribution: true }}
+            // Collapse/expand the node's subtree. Leaves are left alone — a
+            // click that hides nothing should not look like it did something.
+            // The node's own controls (HITL buttons, the external-record link)
+            // already stopPropagation, so they never toggle the branch shut.
+            onNodeClick={(_, node) => {
+              if ((node.data.childCount ?? 0) > 0) toggleCollapse(node.id);
+            }}
           >
             <Background />
             <InitialFit nodeCount={nodes.length} />

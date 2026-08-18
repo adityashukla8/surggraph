@@ -7,6 +7,7 @@ import {
   nodeKindColorVar,
   nodeKindOutlineStyle,
   NODE_TYPE_ICON,
+  NODE_TYPE_LABEL,
   CONFIRMATION_STATUS_COLOR,
 } from "./palette";
 
@@ -22,12 +23,18 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
   const agentColor = agentColorVar(data.sourceAgent);
   const isPredicted = Boolean(data.predicted);
   const statusColor = data.confirmationSignal ? CONFIRMATION_STATUS_COLOR[data.confirmationSignal] : undefined;
+  const hasChildren = (data.childCount ?? 0) > 0;
 
   return (
     <div
-      className={`case-node case-node--${data.nodeType}${isPredicted ? " case-node--predicted" : ""}`}
+      className={`case-node case-node--${data.nodeType}${isPredicted ? " case-node--predicted" : ""}${
+        hasChildren ? " case-node--collapsible" : ""
+      }${data.collapsed ? " case-node--collapsed" : ""}`}
       style={{ borderColor: kindColor, borderStyle: outlineStyle, width: data.width }}
-      title={`${data.label}\n${data.sourceAgent} · ${data.sourceTool} · ${new Date(data.timestamp).toLocaleTimeString()}`}
+      title={
+        `${data.label}\n${data.sourceAgent} · ${data.sourceTool} · ${new Date(data.timestamp).toLocaleTimeString()}` +
+        (hasChildren ? `\n\nClick to ${data.collapsed ? "expand" : "collapse"} this branch` : "")
+      }
     >
       <Handle type="target" position={Position.Left} style={{ background: kindColor }} />
       <div className="case-node__row">
@@ -56,24 +63,40 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
           </a>
         )}
       </div>
-      {(data.confidence !== undefined || statusColor || data.severityBand) && (
-        <div className="case-node__meta">
-          {/* Severity, not confidence, is what decides whether this error gets
-              reasoned about — so it has to be on the node. Two errors at 95%
-              confidence can behave completely differently. */}
-          {data.severityBand && (
-            <span className="case-node__severity" style={{ color: kindColor }}>
-              {data.severityBand}
-            </span>
-          )}
-          {data.confidence !== undefined && (
-            <span className="case-node__confidence">{Math.round(data.confidence * 100)}%</span>
-          )}
-          {statusColor && (
-            <span className="case-node__status-dot" style={{ background: statusColor }} title={data.confirmationSignal} />
-          )}
-        </div>
-      )}
+      {/* Always rendered, because every node has a kind. The tag says WHAT this
+          node is without a trip to the legend — the legend still exists for the
+          edge kinds and the colour encoding, which a per-node tag can't carry.
+          Text, not just the outline hue, so the kind survives a greyscale
+          screenshot and a colourblind viewer.
+          measureLabel.ts::metaRowWidth measures this row; keep the two in sync
+          or nodes will render wider or narrower than dagre reserved for them. */}
+      <div className="case-node__meta">
+        <span className="case-node__tag" style={{ color: kindColor }}>
+          {NODE_TYPE_LABEL[data.nodeType] ?? data.nodeType}
+        </span>
+        {/* Severity, not confidence, is what decides whether this error gets
+            reasoned about — so it has to be on the node. Two errors at 95%
+            confidence can behave completely differently. */}
+        {data.severityBand && (
+          <span className="case-node__severity" style={{ color: kindColor }}>
+            {data.severityBand}
+          </span>
+        )}
+        {data.confidence !== undefined && (
+          <span className="case-node__confidence">{Math.round(data.confidence * 100)}%</span>
+        )}
+        {statusColor && (
+          <span className="case-node__status-dot" style={{ background: statusColor }} title={data.confirmationSignal} />
+        )}
+        {/* Collapse affordance, pushed to the right edge like the actions
+            panel's chevron. Only on nodes that actually have a subtree to
+            hide — a caret on a leaf would promise something a click cannot
+            deliver. Collapsed carries the REAL count of what is hidden, so a
+            closed branch can never silently swallow part of the case. */}
+        {hasChildren && (
+          <span className="case-node__collapse">{data.collapsed ? `▸ ${data.hiddenCount ?? 0}` : "▾"}</span>
+        )}
+      </div>
       {/* HITL #1. Only on a live proposal the surgeon has not yet answered —
           an escalation has no plan to acknowledge, and a resolved one shows
           its outcome instead of offering the choice again. */}

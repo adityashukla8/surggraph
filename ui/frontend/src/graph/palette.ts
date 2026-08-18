@@ -159,6 +159,43 @@ export const CONFIRMATION_STATUS_COLOR: Record<string, string> = {
 // Shape is the one channel that survives both color-blindness and a greyscale
 // screenshot, so each family gets a visually distinct glyph.
 
+// --- Kind names -------------------------------------------------------------
+// The single source of truth for what each node kind is CALLED. Rendered as a
+// tag on the node itself and as the lead-in on the legend's rows, so the two
+// are the same string by construction rather than by two people remembering.
+//
+// Kept deliberately short — one word where the language allows one. These sit
+// in a node's meta row alongside severity and confidence, inside a box whose
+// width is driven by the label above it, so a long name here costs real
+// horizontal space on every node of that kind.
+
+export const NODE_TYPE_LABEL: Record<NodeType, string> = {
+  // Structural
+  trigger: "Trigger",
+  agent: "Agent",
+  patient_twin: "Patient",
+  // Perception + phase
+  entity: "Entity",
+  perception_event: "Event",
+  snapshot: "Snapshot",
+  phase: "Phase",
+  vitals: "Vitals",
+  manual_event: "Human note",
+  // Reasoning chain
+  error: "Error",
+  complication: "Complication",
+  literature_evidence: "Evidence",
+  corrective_trajectory: "Proposal",
+  divergence_alert: "Alert",
+  // Action + safety
+  action_intent: "Intent",
+  verification_block: "Gate",
+  action_outcome: "Outcome",
+  // Post-case
+  benchmark: "Benchmark",
+  documentation: "Op note",
+};
+
 export const NODE_TYPE_ICON: Record<NodeType, string> = {
   // Structural
   trigger: "⏵",

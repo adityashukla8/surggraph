@@ -3,6 +3,7 @@ import type { CaseFlowNode } from "./nodeTypes";
 import type { CaseFlowEdge } from "./edgeTypes";
 import type { GraphEdgePatch, GraphNodePatch, ReasoningLogEntry, StateDiffEvent, StateSnapshot } from "./types";
 import { layoutGraph } from "./layout";
+import { applyCollapse, resetCollapse, useCollapsedNodes } from "./useGraphCollapse";
 
 const STATE_SERVICE_URL = import.meta.env.VITE_STATE_SERVICE_URL ?? "http://localhost:8080";
 const LAYOUT_DEBOUNCE_MS = 500;
@@ -49,8 +50,14 @@ function toFlowEdge(patch: GraphEdgePatch): CaseFlowEdge {
 export type ConnectionStatus = "idle" | "connecting" | "connected" | "disconnected";
 
 interface CaseStateStreamResult {
+  /** What the canvas draws: collapsed branches removed, laid out by dagre. */
   nodes: CaseFlowNode[];
   edges: CaseFlowEdge[];
+  /** The COMPLETE graph, unaffected by collapse. The side panels read these:
+   *  hiding a branch is a way of looking at the canvas and must never remove a
+   *  citation or a vitals reading from a panel that has nothing to do with it. */
+  allNodes: GraphNodePatch[];
+  allEdges: CaseFlowEdge[];
   log: ReasoningLogEntry[];
   status: ConnectionStatus;
   error: string | null;
@@ -154,7 +161,6 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
             source_agent: event.source_agent,
             source_tool: event.source_tool,
             reason: event.reason,
-            nodeId: event.node?.node_id,
             nodeType: event.node?.node_type,
             videoTimeS: typeof event.node?.attrs?.video_time_s === "number" ? (event.node.attrs.video_time_s as number) : undefined,
           },
@@ -163,10 +169,15 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
       );
     }
 
-    async function resync() {
+    /** Fetches the snapshot and returns its seq — the exact point the stream
+     *  must resume from. Returning it (rather than discarding it) is what
+     *  closes the snapshot/stream gap: see the comment on connect(). */
+    async function resync(): Promise<number> {
       const resp = await fetch(`${STATE_SERVICE_URL}/state/${caseId}/snapshot`);
       if (!resp.ok) throw new Error(`snapshot fetch failed: ${resp.status}`);
-      applySnapshot(await resp.json());
+      const snapshot: StateSnapshot = await resp.json();
+      applySnapshot(snapshot);
+      return snapshot.seq;
     }
 
     function scheduleRetry() {
@@ -177,12 +188,22 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
     async function connect() {
       setStatus("connecting");
       try {
-        await resync();
+        const seq = await resync();
         if (cancelled) return;
         setStatus("connected");
         setError(null);
 
-        es = new EventSource(`${STATE_SERVICE_URL}/state/${caseId}/stream`);
+        // RESUME FROM THE SNAPSHOT'S OWN SEQ, never from "now".
+        //
+        // Without since_seq the server baselines the stream at whatever the
+        // case seq is when the subscription lands, and everything written
+        // between this fetch and that moment reaches neither side — verified
+        // against the real service, not inferred. The orchestrator writes the
+        // whole case skeleton in one batch right after /cases/open returns,
+        // which lands squarely in that window, so the trigger node would
+        // sometimes never appear and the aggregation node's absence left every
+        // error node orphaned (its edges dropped as dangling).
+        es = new EventSource(`${STATE_SERVICE_URL}/state/${caseId}/stream?since_seq=${seq}`);
         es.addEventListener("state_diff", (evt) => {
           applyDiff(JSON.parse((evt as MessageEvent).data));
         });
@@ -225,13 +246,40 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
       .map(toFlowEdge);
   }, [edgesById, nodesById]);
 
+  // Collapse is a view of ONE graph. Carrying node ids into the next case
+  // would hide arbitrary nodes there, so a new case starts fully expanded.
+  useEffect(() => {
+    resetCollapse();
+  }, [caseId]);
+
+  const collapsedIds = useCollapsedNodes();
+  const [visibleEdges, setVisibleEdges] = useState<CaseFlowEdge[]>([]);
+  const allNodes = useMemo(() => Array.from(nodesById.values()), [nodesById]);
+
   useEffect(() => {
     const handle = setTimeout(() => {
       const rawNodes = Array.from(nodesById.values()).map(toFlowNode);
-      setLayoutedNodes(layoutGraph(rawNodes, edgesArray));
+      // Filter BEFORE layout: dagre must reserve space for the visible graph
+      // only, so a collapsed branch closes the gap it was occupying instead of
+      // leaving a hole where it used to be.
+      const view = applyCollapse(rawNodes, edgesArray, collapsedIds);
+      setLayoutedNodes(layoutGraph(view.nodes, view.edges));
+      setVisibleEdges(view.edges);
     }, LAYOUT_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [nodesById, edgesArray]);
+  }, [nodesById, edgesArray, collapsedIds]);
 
-  return { nodes: layoutedNodes, edges: edgesArray, log, status, error };
+  return {
+    // What the canvas draws: visible only, laid out.
+    nodes: layoutedNodes,
+    edges: visibleEdges,
+    // What the side panels read. Deliberately the COMPLETE graph — collapsing a
+    // branch is a way of looking at the canvas, and must never take a citation
+    // or a vitals reading out of a panel that has nothing to do with it.
+    allNodes,
+    allEdges: edgesArray,
+    log,
+    status,
+    error,
+  };
 }

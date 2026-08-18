@@ -148,6 +148,48 @@ async def test_mid_sequence_subscribe_gets_no_replay(store: CaseGraphStore, clea
 
 
 @pytest.mark.asyncio
+async def test_snapshot_to_stream_handoff_loses_nothing(store: CaseGraphStore, cleanup_cases: list[str]):
+    """A patch written BETWEEN a client's snapshot fetch and its subscribe must
+    still reach that client.
+
+    This is the real, reported bug the test above does not cover: that one
+    guards against replaying too MUCH (history arriving as if it were live),
+    and it passes happily while the opposite failure — delivering too LITTLE —
+    goes unnoticed. The UI does exactly this sequence on every case open, and
+    the orchestrator writes the entire case skeleton in one batch right in the
+    middle of it, so the window is hit routinely rather than rarely.
+
+    Baselining the stream at "now" instead of at the snapshot's seq made the
+    trigger node intermittently absent and left every error node orphaned, the
+    aggregation node having vanished with the same batch and taken its edges
+    down as dangling. Passing since_seq is what makes the two halves meet.
+    """
+    case_id = _case_id("handoff")
+    cleanup_cases.append(case_id)
+
+    await store.apply_patch(case_id, _node_event(case_id, "agent:before"))
+
+    # 1. the client fetches its snapshot
+    snapshot = await store.snapshot(case_id)
+
+    # 2. THE GAP — a real write lands before the subscription is established
+    await store.apply_patch(case_id, _node_event(case_id, "agent:in_the_gap"))
+
+    # 3. the client subscribes, resuming from the snapshot it actually holds
+    queue, watch = await store.subscribe(case_id, since_seq=snapshot.seq)
+    try:
+        event = await asyncio.wait_for(queue.get(), timeout=15)
+        assert event.node is not None
+        assert event.node.node_id == "agent:in_the_gap", (
+            "the gap write was dropped: it is in neither the snapshot nor the stream"
+        )
+        # The snapshot half of the handoff still carries what preceded it.
+        assert "agent:before" in {n.node_id for n in snapshot.nodes}
+    finally:
+        await store.unsubscribe(case_id, watch)
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_stops_delivery(store: CaseGraphStore, cleanup_cases: list[str]):
     case_id = _case_id("cleanup")
     cleanup_cases.append(case_id)

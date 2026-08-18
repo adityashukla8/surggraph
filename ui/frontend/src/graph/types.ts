@@ -105,6 +105,14 @@ export interface CaseGraphNodeData extends Record<string, unknown> {
   /** Real rendered width in px, measured and assigned by layoutGraph so the
    *  node renders at exactly the size dagre reserved for it (plan_v2 §4.1). */
   width?: number;
+  /** Distinct direct children. Zero means clicking this node collapses nothing,
+   *  so it gets no toggle affordance and no pointer cursor. */
+  childCount?: number;
+  /** This node's subtree is currently hidden (useGraphCollapse.ts). */
+  collapsed?: boolean;
+  /** How many nodes this collapse is actually hiding right now. Only set while
+   *  collapsed. */
+  hiddenCount?: number;
   raw: GraphNodePatch;
 }
 
@@ -132,10 +140,9 @@ export interface ReasoningLogEntry {
   source_agent: string;
   source_tool: string;
   reason: string;
-  /** The node this event wrote, when it wrote one. Carried so a log row can
-   *  show the case's own video time and category rather than only wall-clock
-   *  time and a raw agent name. */
-  nodeId?: string;
+  /** Set when this event wrote a node. Carries the case's own video time and
+   *  the node kind, so a feed row can be tagged and stamped in case time and
+   *  not only in wall-clock time — the clock a reviewer actually reasons in. */
   nodeType?: NodeType;
   videoTimeS?: number;
 }

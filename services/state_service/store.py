@@ -244,11 +244,38 @@ class CaseGraphStore:
 
         return [e.model_copy(update={"case_id": case_id, "seq": seq}) for e, seq in zip(incoming, seqs)]
 
-    async def subscribe(self, case_id: str) -> tuple[asyncio.Queue[StateDiffEvent], Watch]:
-        client = _get_async_client()
-        case_ref = client.collection("cases").document(case_id)
-        case_snap = await case_ref.get()
-        baseline_seq = _seq_of(case_snap)
+    async def subscribe(self, case_id: str, since_seq: int | None = None) -> tuple[asyncio.Queue[StateDiffEvent], Watch]:
+        """Streams every graph item written after `since_seq`.
+
+        `since_seq` MUST be supplied by any client that also fetched a
+        snapshot, and must be that snapshot's own seq. Without it this falls
+        back to the case's seq as of right now, which opens a real, observed
+        data-loss window: a client does GET /snapshot (seq N) and then attaches
+        the stream a moment later (seq M), and everything written in (N, M] is
+        in neither — not in the snapshot, because it did not exist yet, and not
+        in the stream, because the baseline had already moved past it.
+
+        That window is not theoretical. The orchestrator writes the entire
+        case skeleton — the trigger node, the patient twin, every agent node
+        including the error-detection aggregation step, and their edges — in
+        one batch immediately after /cases/open returns, which is exactly when
+        a freshly-loaded UI is between its snapshot fetch and its stream
+        attach. Losing that batch makes the trigger node absent and leaves
+        every error node visually orphaned, because the edges pointing at the
+        missing aggregation node get dropped as dangling. Both were reported
+        as intermittent UI bugs and both trace here.
+
+        Passing the snapshot's seq closes the gap by construction: the snapshot
+        covers everything up to N, the stream covers everything after N, and
+        the two meet exactly with no overlap and no hole.
+        """
+        if since_seq is None:
+            client = _get_async_client()
+            case_ref = client.collection("cases").document(case_id)
+            case_snap = await case_ref.get()
+            baseline_seq = _seq_of(case_snap)
+        else:
+            baseline_seq = since_seq
 
         queue: asyncio.Queue[StateDiffEvent] = asyncio.Queue()
         loop = asyncio.get_running_loop()

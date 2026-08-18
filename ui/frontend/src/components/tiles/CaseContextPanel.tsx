@@ -89,10 +89,12 @@ function Field({
 }
 
 function Group({ title, summary, children }: { title: string; summary: string; children: React.ReactNode }) {
-  // Native <details open> — starts expanded, and the browser owns the toggle
-  // afterwards rather than React fighting it on every SSE re-render.
+  // Native <details>, collapsed by default — the header line already carries
+  // the summary a reader needs at a glance, so the panel stays short and the
+  // detail is one click away. Uncontrolled on purpose: the browser owns the
+  // toggle rather than React re-collapsing it on every SSE re-render.
   return (
-    <details className="case-context__group" open>
+    <details className="case-context__group">
       <summary className="case-context__group-header">
         <span>{title}</span>
         <span className="case-context__group-summary">{summary}</span>

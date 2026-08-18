@@ -19,19 +19,14 @@ actually processed) — not just phase/event nodes as before.
 
 from __future__ import annotations
 
-import logging
-
 from agents.error_detection.coordinator import ErrorDetectionWindowAssessment, build_divergence_events, run_error_detection_sweep
 from agents.error_detection.aggregation import DEFAULT_THRESHOLD
-from agents.error_detection.phase_link import link_error
 from agents.error_detection.severity import assess
 from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.action_labels import load_action_segments, phase_at_frame
 from tools.state_tools import apply_state_patch, get_state_snapshot
 from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_time, format_video_time_range
-
-logger = logging.getLogger(__name__)
 
 _COORDINATOR_NODE_ID = "agent:error_detection_coordinator"
 
@@ -265,16 +260,6 @@ async def error_detection_case(
                 ),
                 reason=divergence.reasoning_trace,
             )
-
-            # Link the error to the activity it happened during, if perception
-            # has already observed that window. Best-effort and guarded: the
-            # two sweeps run independently, anything missed here is picked up
-            # by the reconciliation pass at case close, and a failure must
-            # never take down a detection that already succeeded.
-            try:
-                await link_error(case_id, event_node_id, video_time_s)
-            except Exception:
-                logger.exception("error_detection[%s]: could not link %s to an activity", case_id, event_node_id)
 
     await run_error_detection_sweep(
         video_id, start_s=start_s, end_s=end_s, window_s=window_s, stride_s=window_s, on_window_complete=on_window_complete

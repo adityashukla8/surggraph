@@ -57,7 +57,9 @@ function App() {
   const [caseId, setCaseId] = useState<string | null>(null);
   const triggering = useRef(false);
 
-  const { nodes, edges, log, status, error } = useCaseStateStream(caseId);
+  // nodes/edges are what the canvas draws (collapsed branches removed);
+  // allNodes/allEdges are the complete graph the side panels reason over.
+  const { nodes, edges, allNodes, allEdges, log, status, error } = useCaseStateStream(caseId);
 
   function handleFirstPlay() {
     if (triggering.current || caseId !== null) return; // only the first play triggers a case
@@ -86,17 +88,12 @@ function App() {
       <main className="dashboard__grid">
         <VideoPanel videoUrl={RAW_VIDEO_URL} onPlay={handleFirstPlay} />
         <StateGraphPanel nodes={nodes} edges={edges} status={status} error={error} />
-        <EventInputPanel
-          log={log}
-          nodes={nodes.map((n) => n.data.raw)}
-          edges={edges.map((e) => ({ source: e.source, target: e.target, edgeKind: e.data?.edgeKind ?? "" }))}
-          onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())}
-        />
-        <CaseContextPanel caseId={caseId} nodes={nodes.map((n) => n.data.raw)} />
+        <EventInputPanel log={log} onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())} />
+        <CaseContextPanel caseId={caseId} nodes={allNodes} />
         <AutonomousActionsPanel
           caseId={caseId}
-          nodes={nodes.map((n) => n.data.raw)}
-          edges={edges.map((e) => ({ source: e.source, target: e.target, edgeKind: e.data?.edgeKind ?? "" }))}
+          nodes={allNodes}
+          edges={allEdges.map((e) => ({ source: e.source, target: e.target, edgeKind: e.data?.edgeKind ?? "" }))}
         />
       </main>
     </div>
