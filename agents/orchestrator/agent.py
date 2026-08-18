@@ -38,10 +38,11 @@ import asyncio
 import logging
 from typing import AsyncGenerator
 
-from google.adk.agents import BaseAgent
+from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event
 from google.genai import types
+from pydantic import BaseModel
 
 from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.complication_reasoning import agent as complication_reasoning
@@ -55,6 +56,8 @@ from agents.perception.agent import perception_case
 from agents.perception.subagent import build_subagent as build_perception_subagent
 from state import event_bus, node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
+from tools.adk_runner import run_llm_agent_once
+from tools.gemini_model import new_agent_model
 from tools.patient_twin import load_patient_twin, patient_twin_attrs
 from tools.state_tools import apply_state_patch, apply_state_patches
 from tools.video_utils import SWEEP_END_S, SWEEP_START_S, find_video_duration_s, format_video_time_range
@@ -89,6 +92,51 @@ _TOP_LEVEL_AGENTS = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _PrimeOutput(BaseModel):
+    ready: bool
+
+
+# One throwaway LlmAgent, built once at import — same real model/location
+# (tools.gemini_model.new_agent_model, the `global`-location GlobalGemini
+# wrapper) every real sweep agent uses, so the prime call exercises the same
+# real serving path rather than a different endpoint that wouldn't warm
+# anything relevant.
+_PRIME_AGENT = LlmAgent(
+    name="orchestrator_prime",
+    model=new_agent_model(),
+    instruction="Reply with ready=true. Nothing else to do.",
+    output_schema=_PrimeOutput,
+)
+
+
+async def _prime_gemini(case_id: str) -> None:
+    """Fires one tiny real Gemini call before the real sweeps dispatch.
+
+    Real basis (docs/latency_optimization.md, third pass): 211 real calls in
+    one run had p50=6.7s but max=55.5s — a spread wide enough, on calls of
+    comparable real complexity, to be consistent with a cold-start tax on an
+    early call to a fresh serving path (Vertex AI Dynamic Shared Quota
+    admission/routing, TLS/channel setup) rather than call-to-call reasoning
+    difficulty. This fires one minimal real request through the identical
+    model/location config first, so by the time Error Detection and
+    Perception's sweeps make their own first real calls (moments later, via
+    asyncio.gather below), that cold path has already been paid for once.
+
+    Best-effort, never blocking: a warm-up call that errors, times out, or
+    is simply slow must never delay or fail the real sweep it exists to
+    help — caught and logged, same as every other non-critical failure path
+    in this module (docs/agentic_workflow.md §10)."""
+    try:
+        await run_llm_agent_once(
+            _PRIME_AGENT,
+            types.Content(role="user", parts=[types.Part(text="ping")]),
+            _PrimeOutput,
+            app_name="surggraph_prime",
+        )
+    except Exception:
+        logger.warning("case %s: prime call failed — sweeps proceed on a cold path", case_id, exc_info=True)
 
 
 async def _draw_static_hierarchy(case_id: str, start_s: float, end_s: float, video_id: str) -> None:
@@ -319,7 +367,16 @@ async def open_case(
             end_s,
         )
 
-    await _draw_static_hierarchy(case_id, start_s, end_s, video_id)
+    # Concurrent, not sequential: the skeleton write is Firestore-only, the
+    # prime call is Gemini-only — genuinely independent work, no reason to
+    # pay both latencies back to back. Skeleton lands on the graph fast
+    # either way; the prime call's real point is finishing (or at least
+    # having been dispatched) before the two big sweeps make their own first
+    # real calls a few lines down.
+    await asyncio.gather(
+        _draw_static_hierarchy(case_id, start_s, end_s, video_id),
+        _prime_gemini(case_id),
+    )
 
     # Register the event-driven agents BEFORE any sweep starts. The bus is the
     # only thing that wakes them (docs/agentic_workflow.md §7): they do not

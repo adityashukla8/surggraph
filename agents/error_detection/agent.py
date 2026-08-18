@@ -6,10 +6,15 @@ sub-agent's real input (which window/frames it examined) and output (its
 actual reasoning text) becomes a visible actionEdge the moment that
 window's analysis finishes (agents/error_detection/coordinator.py's
 `on_window_complete` callback, driven by asyncio.as_completed — see that
-module for why). A window can now fire MULTIPLE real divergences (one per
-error category that independently crossed threshold — see
-docs/latency_optimization.md's unconditional-deep-pass restructuring),
-each getting its own "event" node + observedEdge.
+module for why). A window CAN still fire more than one real divergence in
+the same window (the escalated category's real deep review, plus any
+screen-derived fallback verdict on another category that independently
+clears the aggregation threshold on its own — see coordinator.py's
+CategoryResult.reviewed and docs/latency_optimization.md's Fourth pass,
+Priority 2), though this is less systematic than when deep review ran
+unconditionally across all 6 categories every window. Each fired divergence
+gets its own "event" node + observedEdge regardless of which review tier
+produced it.
 
 Every node this module writes carries a real video-time range, widened as
 more windows land for agent nodes (the persistent ones aren't tied to one
@@ -25,7 +30,7 @@ from agents.error_detection.severity import assess
 from state import node_ids
 from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.action_labels import load_action_segments, phase_at_frame
-from tools.state_tools import apply_state_patch, get_state_snapshot
+from tools.state_tools import apply_state_patches, get_state_snapshot
 from tools.video_utils import DEFAULT_WINDOW_S, find_video_fps, format_video_time, format_video_time_range
 
 _COORDINATOR_NODE_ID = "agent:error_detection_coordinator"
@@ -65,18 +70,28 @@ SUB_AGENT_LABELS = {
 async def _ensure_agent_nodes(case_id: str) -> None:
     """Persistent agent nodes — created once, no time range yet (real
     windows haven't landed). Same node_id every call is intentional
-    (idempotent upsert)."""
+    (idempotent upsert).
+
+    Batched into ONE write (docs/latency_optimization.md, Fourth pass,
+    Priority 3): the third-pass profile found single-item transactional
+    writes cost ~1015ms median each versus ~124ms/item batched — this alone
+    was 7 single writes (~7s of pure transaction overhead) for content that
+    has no ordering dependency and only ever runs once per case."""
+    patches: list[tuple[GraphNodePatch | None, GraphEdgePatch | None, str]] = []
+
     for node_id, label in SUB_AGENT_LABELS.items():
-        await apply_state_patch(
-            case_id,
-            node=GraphNodePatch(
-                node_id=f"agent:{node_id}",
-                node_type="agent",
-                label=label,
-                source_agent=node_id,
-                source_tool="error_detection_case",
-            ),
-            reason=f"{label} registered for this case",
+        patches.append(
+            (
+                GraphNodePatch(
+                    node_id=f"agent:{node_id}",
+                    node_type="agent",
+                    label=label,
+                    source_agent=node_id,
+                    source_tool="error_detection_case",
+                ),
+                None,
+                f"{label} registered for this case",
+            )
         )
 
     # Real hierarchy, not decorative: the coordinator genuinely owns these
@@ -87,43 +102,57 @@ async def _ensure_agent_nodes(case_id: str) -> None:
     for sub_node_id, sub_label in SUB_AGENT_LABELS.items():
         if sub_node_id == "error_detection_coordinator":
             continue
-        await apply_state_patch(
-            case_id,
-            edge=GraphEdgePatch(
-                edge_id=f"edge:hierarchy-error_detection_coordinator-{sub_node_id}",
-                source_node_id="agent:error_detection_coordinator",
-                target_node_id=f"agent:{sub_node_id}",
-                edge_kind="hierarchy",
-                source_agent="error_detection_coordinator",
-                source_tool="error_detection_case",
-                reason=f"Error Detection Coordinator owns {sub_label}",
-            ),
-            reason=f"Error Detection Coordinator owns {sub_label}",
+        patches.append(
+            (
+                None,
+                GraphEdgePatch(
+                    edge_id=f"edge:hierarchy-error_detection_coordinator-{sub_node_id}",
+                    source_node_id="agent:error_detection_coordinator",
+                    target_node_id=f"agent:{sub_node_id}",
+                    edge_kind="hierarchy",
+                    source_agent="error_detection_coordinator",
+                    source_tool="error_detection_case",
+                    reason=f"Error Detection Coordinator owns {sub_label}",
+                ),
+                f"Error Detection Coordinator owns {sub_label}",
+            )
         )
 
+    await apply_state_patches(case_id, patches)
 
-async def _widen_agent_time_ranges(
-    case_id: str, window_start_s: float, window_end_s: float, agent_ranges: dict[str, tuple[float, float]]
-) -> None:
+
+def _widen_agent_time_ranges(
+    window_start_s: float, window_end_s: float, agent_ranges: dict[str, tuple[float, float]]
+) -> list[tuple[GraphNodePatch | None, GraphEdgePatch | None, str]]:
     """Widens (never shrinks) each persistent agent node's real cumulative
-    time range to cover this window too, re-writing the node's label. Runs
-    once per window — real, not decorative: an agent node's range is
-    exactly the real span of windows it has actually processed so far."""
+    time range to cover this window too. Runs once per window — real, not
+    decorative: an agent node's range is exactly the real span of windows it
+    has actually processed so far.
+
+    Returns patches rather than writing them directly (docs/latency_optimization.md,
+    Fourth pass, Priority 3) — on_window_complete folds these into the SAME
+    batch as this window's sub-agent edges and any fired divergences, so a
+    window that used to cost 4 (widen) + 3 (edges) + up to 12 (divergences)
+    separate transactional writes now costs one."""
+    patches: list[tuple[GraphNodePatch | None, GraphEdgePatch | None, str]] = []
     for node_id, label in SUB_AGENT_LABELS.items():
         prev = agent_ranges.get(node_id)
         new_range = (window_start_s, window_end_s) if prev is None else (min(prev[0], window_start_s), max(prev[1], window_end_s))
         agent_ranges[node_id] = new_range
-        await apply_state_patch(
-            case_id,
-            node=GraphNodePatch(
-                node_id=f"agent:{node_id}",
-                node_type="agent",
-                label=f"{label} ({format_video_time_range(*new_range)})",
-                source_agent=node_id,
-                source_tool="error_detection_case",
-            ),
-            reason=f"{label} processed window {format_video_time_range(window_start_s, window_end_s)}",
+        patches.append(
+            (
+                GraphNodePatch(
+                    node_id=f"agent:{node_id}",
+                    node_type="agent",
+                    label=f"{label} ({format_video_time_range(*new_range)})",
+                    source_agent=node_id,
+                    source_tool="error_detection_case",
+                ),
+                None,
+                f"{label} processed window {format_video_time_range(window_start_s, window_end_s)}",
+            )
         )
+    return patches
 
 
 async def error_detection_case(
@@ -161,7 +190,19 @@ async def error_detection_case(
 
         window_start_s = assessment.start_frame / fps
         window_end_s = assessment.end_frame / fps
-        await _widen_agent_time_ranges(case_id, window_start_s, window_end_s, agent_ranges)
+
+        # Everything this window produces — widened agent ranges, every
+        # sub-agent's real reasoning edge, and any fired divergence(s) — is
+        # collected here and written in ONE batch at the end, instead of one
+        # transaction per item (docs/latency_optimization.md, Fourth pass,
+        # Priority 3: single-item writes measured ~1015ms median each vs
+        # ~124ms/item batched, ~8x the transaction count this window used to
+        # cost for content with no real ordering dependency between items —
+        # a node and the edge pointing at it commit together atomically
+        # either way, batched or not).
+        patches: list[tuple[GraphNodePatch | None, GraphEdgePatch | None, str]] = _widen_agent_time_ranges(
+            window_start_s, window_end_s, agent_ranges
+        )
 
         # Real-time traceability: every sub-agent's actual input (this
         # window) and output (its real reasoning) becomes a visible edge,
@@ -176,20 +217,20 @@ async def error_detection_case(
         # fired, so the graph traces what every agent is doing rather than only
         # the final verdict.
         for sub in assessment.sub_agent_assessments:
-            await apply_state_patch(
-                case_id,
-                edge=GraphEdgePatch(
-                    edge_id=node_ids.edge(node_ids.agent(f"error_detection_{sub.agent_role}"), _AGGREGATION_NODE_ID, "detection"),
-                    source_node_id=node_ids.agent(f"error_detection_{sub.agent_role}"),
-                    target_node_id=_AGGREGATION_NODE_ID,
-                    edge_kind="detection",
-                    source_agent=f"error_detection_{sub.agent_role}",
-                    source_tool="run_error_detection_window",
-                    reason=sub.reasoning,
-                ),
-                reason=sub.reasoning,
-                source_agent=f"error_detection_{sub.agent_role}",
-                source_tool="run_error_detection_window",
+            patches.append(
+                (
+                    None,
+                    GraphEdgePatch(
+                        edge_id=node_ids.edge(node_ids.agent(f"error_detection_{sub.agent_role}"), _AGGREGATION_NODE_ID, "detection"),
+                        source_node_id=node_ids.agent(f"error_detection_{sub.agent_role}"),
+                        target_node_id=_AGGREGATION_NODE_ID,
+                        edge_kind="detection",
+                        source_agent=f"error_detection_{sub.agent_role}",
+                        source_tool="run_error_detection_window",
+                        reason=sub.reasoning,
+                    ),
+                    sub.reasoning,
+                )
             )
 
         for divergence in build_divergence_events(case_id, assessment, phase):
@@ -216,50 +257,56 @@ async def error_detection_case(
             )
 
             readable = divergence.error_category.replace("_", " ")
-            await apply_state_patch(
-                case_id,
-                node=GraphNodePatch(
-                    node_id=event_node_id,
-                    node_type="error",
-                    label=f"{readable} at {format_video_time(video_time_s)}",
-                    attrs={
-                        "error_category": divergence.error_category,
-                        "severity": score,
-                        "severity_band": band,
-                        "confidence": divergence.confidence,
-                        "composite_score": divergence.composite_score,
-                        "threshold_used": divergence.threshold_used,
-                        "psi": divergence.psi,
-                        "window_id": divergence.window_id,
-                        "video_time_s": round(video_time_s, 1),
-                        "reasoning": divergence.reasoning_trace,
-                    },
-                    source_agent="error_detection_coordinator",
-                    source_tool="error_detection_case",
-                ),
-                reason=divergence.reasoning_trace,
+            patches.append(
+                (
+                    GraphNodePatch(
+                        node_id=event_node_id,
+                        node_type="error",
+                        label=f"{readable} at {format_video_time(video_time_s)}",
+                        attrs={
+                            "error_category": divergence.error_category,
+                            "severity": score,
+                            "severity_band": band,
+                            "confidence": divergence.confidence,
+                            "composite_score": divergence.composite_score,
+                            "threshold_used": divergence.threshold_used,
+                            "psi": divergence.psi,
+                            "window_id": divergence.window_id,
+                            "video_time_s": round(video_time_s, 1),
+                            "reasoning": divergence.reasoning_trace,
+                        },
+                        source_agent="error_detection_coordinator",
+                        source_tool="error_detection_case",
+                    ),
+                    None,
+                    divergence.reasoning_trace,
+                )
             )
-            await apply_state_patch(
-                case_id,
-                edge=GraphEdgePatch(
-                    # Anchored to the coordinator that actually detected this,
-                    # NOT to f"phase:{phase}". That id does not exist: the
-                    # opaque phase id here is a bare number, while Perception
-                    # writes phase nodes as phase:{id}:{window}. The edge
-                    # pointed at a node nobody ever wrote, so it was silently
-                    # dropped by the renderer and every error node floated
-                    # disconnected. The coordinator node is drawn in the static
-                    # skeleton before any sweep starts, so it always exists.
-                    edge_id=node_ids.edge(_AGGREGATION_NODE_ID, event_node_id, "detection"),
-                    source_node_id=_AGGREGATION_NODE_ID,
-                    target_node_id=event_node_id,
-                    edge_kind="detection",
-                    source_agent="error_detection_coordinator",
-                    source_tool="error_detection_case",
-                    reason=divergence.reasoning_trace,
-                ),
-                reason=divergence.reasoning_trace,
+            patches.append(
+                (
+                    None,
+                    GraphEdgePatch(
+                        # Anchored to the coordinator that actually detected this,
+                        # NOT to f"phase:{phase}". That id does not exist: the
+                        # opaque phase id here is a bare number, while Perception
+                        # writes phase nodes as phase:{id}:{window}. The edge
+                        # pointed at a node nobody ever wrote, so it was silently
+                        # dropped by the renderer and every error node floated
+                        # disconnected. The coordinator node is drawn in the static
+                        # skeleton before any sweep starts, so it always exists.
+                        edge_id=node_ids.edge(_AGGREGATION_NODE_ID, event_node_id, "detection"),
+                        source_node_id=_AGGREGATION_NODE_ID,
+                        target_node_id=event_node_id,
+                        edge_kind="detection",
+                        source_agent="error_detection_coordinator",
+                        source_tool="error_detection_case",
+                        reason=divergence.reasoning_trace,
+                    ),
+                    divergence.reasoning_trace,
+                )
             )
+
+        await apply_state_patches(case_id, patches)
 
     await run_error_detection_sweep(
         video_id, start_s=start_s, end_s=end_s, window_s=window_s, stride_s=window_s, on_window_complete=on_window_complete

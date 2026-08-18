@@ -52,13 +52,31 @@ _SOURCE_TOOL = "check_trajectory_divergence"
 
 AGENT = build_subagent()
 
-# docs §3 agent 7: "polls every 5-10s while a proposal is active".
-POLL_INTERVAL_S = 8.0
+# docs §3 agent 7: "polls every 5-10s while a proposal is active" — 5.0 is
+# the fast end of that documented range, not outside it.
+#
+# Tightened 2026-08-18 (docs/latency_optimization.md, Fourth pass, Priority
+# 5): the third-pass profile found this loop costing 157s of real wall time
+# across 33 LLM calls in the post-sweep tail, and the orchestrator's own
+# drain budget (derived from these two constants, see agents/orchestrator/agent.py)
+# was measured being HIT in that run — "2 handler(s) exceeded the 126s drain
+# budget, cancelling" — meaning real in-flight work was being force-cancelled,
+# not just waited on. Was POLL_INTERVAL_S=8.0, MAX_POLLS=12 (96s max/proposal).
+#
+# Real, disclosed interaction worth watching: MIN_OBSERVATIONS_TO_JUDGE=2
+# needs Perception to have written 2 new perception_events since the
+# proposal — Perception's own real measured per-window latency is ~30s
+# (docs/latency_optimization.md third pass), so a proposal made just before
+# perception falls behind could now exhaust its whole 40s budget on 1
+# observation instead of 2, more often than at the old 96s budget. Not
+# fabricated-safe; the after-measurement below is what actually decides
+# whether this needs to widen back up.
+POLL_INTERVAL_S = 5.0
 
 # A proposal is not monitored forever. Past this many polls the surgical
 # context has moved on far enough that comparing against it says more about
 # staleness than about the surgeon.
-MAX_POLLS = 12
+MAX_POLLS = 8
 
 # Below this many observations since the proposal, there is not enough evidence
 # to judge anything. Perception is deliberately quiet, so a short list means a

@@ -144,6 +144,14 @@ def build_subagent(
     category: ErrorCategory | None = None,
 ) -> LlmAgent:
     if mode == "screen":
+        # Tiering this to gemini-3.5-flash-lite was tried and measured
+        # (docs/latency_optimization.md, Fourth pass, Priority 2 Step 3) —
+        # real ~38% faster sweep, but macro_f1 dropped 0.699 -> 0.498,
+        # erasing the entire accuracy gain escalation (Step 1/2) had just
+        # won. The screen pass decides WHICH category gets escalated to real
+        # deep review; a weaker model there means real errors are missed at
+        # triage and never reach the deep pass at all. Reverted — full model
+        # kept for both tiers.
         return LlmAgent(
             name=f"error_detection_{role}_screen",
             model=new_agent_model(),

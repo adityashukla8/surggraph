@@ -1,0 +1,11 @@
+{
+  "window_id": "video_01-w0017",
+  "start_s": 85.0,
+  "end_s": 90.0,
+  "composite_score": 3.0,
+  "threshold_used": 1.7,
+  "margin": 1.3,
+  "escalated_category": "out_of_view",
+  "video_id": "video_01",
+  "generated_at": "2026-08-18T09:35:28.895346+00:00"
+}

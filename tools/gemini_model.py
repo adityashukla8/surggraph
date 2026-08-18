@@ -47,6 +47,7 @@ PROJECT_ID = os.environ["SURGGRAPH_PROJECT_ID"]
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_LOCATION = os.environ.get("GEMINI_LOCATION", "global")
 
+
 # Google's documented defaults are attempts=5, initial_delay=1.0s, exp_base=2.0,
 # jitter=1.0 — widened here (more attempts, longer max_delay) since Dynamic
 # Shared Quota contention under this project's concurrent multi-agent workload

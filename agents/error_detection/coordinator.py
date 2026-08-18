@@ -68,7 +68,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import AsyncGenerator, Awaitable, Callable
+from typing import AsyncGenerator, Awaitable, Callable, Literal
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
@@ -76,9 +76,9 @@ from google.adk.events import Event
 from google.genai import types
 from pydantic import BaseModel
 
-from agents.error_detection.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate
+from agents.error_detection.aggregation import DEFAULT_ALPHA, DEFAULT_THRESHOLD, aggregate, pick_escalation_candidate
 from agents.error_detection.knowledge import ERROR_KNOWLEDGE_LIBRARY, compute_psi
-from agents.error_detection.subagents import STILL_FRAME_PROFILE, DeepOutput, ScreenOutput, build_subagent
+from agents.error_detection.subagents import STILL_FRAME_PROFILE, CategoryOpinion, DeepOutput, ScreenOutput, build_subagent
 from state.schema import DivergenceEvent, ErrorCategory, ExpertiseTier, ErrorDetectionSubAgentAssessment, SubAgentRole
 from tools.adk_runner import run_llm_agent_once
 from tools.sedmamba_labels import ErrorAnnotations, ErrorDetectionWindow, generate_windows, load_error_annotations
@@ -113,13 +113,39 @@ logger = logging.getLogger(__name__)
 
 
 class CategoryResult(BaseModel):
-    """One error category's real, independent verdict for a window — the
-    unconditional-deep-pass replacement for the old single `escalated_category`
-    shape. A window can have zero, one, or several of these fire true now."""
+    """One error category's verdict for a window.
+
+    Aug 18 (docs/latency_optimization.md, Fourth pass, Priority 2): reverted
+    the Aug 14 unconditional-deep-pass design — the third-pass profile showed
+    it costing 1203s of 2061s total Gemini time (58%), the single largest
+    line item in the system, for 18 deep calls/window when only ~1 category
+    typically had anything worth a closer look. Escalation is restored via
+    `pick_escalation_candidate` (agents/error_detection/aggregation.py — it
+    already existed, fully tested, simply unwired since the unconditional
+    restructuring), which was ALSO the pre-restructuring design's own
+    behavior when nothing escalated: "the screen-pass booleans stand in as
+    the final O values" (that exact language is original to
+    pick_escalation_candidate's docstring, predating this change).
+
+    `reviewed` distinguishes the two real cases so nothing downstream can
+    mistake a cheap screen-only opinion for the focused deep-tier review it
+    is not: "deep" means the escalated category got its own 3-role,
+    tier-framed deep pass (real 2-of-3 aggregation as before); "screen" means
+    this category's verdict is the screen pass's own per-role suspected/
+    confidence, aggregated the same way, but never independently
+    re-examined. `ErrorDetectionSubAgentAssessment.tier_used` is a closed
+    3-value enum (resident/attending/expert) with no slot for "screen
+    only" — kept at the fixed deep tier for schema/frontend compatibility
+    (nothing currently reads tier_used downstream — verified via repo-wide
+    grep) rather than widening state/schema.py and ui/frontend/src/graph/
+    types.ts for a field this change's scope doesn't otherwise touch; the
+    disclosure lives in `reviewed` and in a `[screen-pass]` prefix on the
+    fallback reasoning text instead."""
 
     composite_score: float
     is_divergence: bool
     assessments: list[ErrorDetectionSubAgentAssessment]
+    reviewed: Literal["deep", "screen"]
 
 
 class ErrorDetectionWindowAssessment(BaseModel):
@@ -193,34 +219,27 @@ async def _run_screen_pass_stills(video_path: Path, window: ErrorDetectionWindow
     return dict(results)
 
 
-async def _run_deep_pass_all_categories(video_path: Path, window: ErrorDetectionWindow) -> dict[ErrorCategory, dict[SubAgentRole, DeepOutput]]:
-    """Deep tier, UNCONDITIONAL across all 6 categories (not gated on
-    screen's escalation choice) at a fixed 'attending' tier — 18 real
-    parallel calls per window (3 roles x 6 categories), real added cost,
-    accepted for latency. Now still frames too, not native video (second
-    latency pass, docs/latency_optimization.md): once this tier became
-    unconditional, its real per-window cost (dominated by native video's
-    GCS-fetch + server-side-decode overhead, not proportional to clip
-    length) was the actual long pole behind "nothing meaningful on the
-    graph for ~2 minutes." Same real frame sample as the screen pass for
-    a given window (STILL_FRAME_PROFILE) — the two tiers now differ in
-    REASONING framing (broad 6-category scan vs. focused single-category,
-    tier-voiced re-examination), not input modality."""
+async def _run_deep_pass_one_category(video_path: Path, window: ErrorDetectionWindow, category: ErrorCategory) -> dict[SubAgentRole, DeepOutput]:
+    """Deep tier, restricted to the ONE category the screen pass escalated
+    (docs/latency_optimization.md, Fourth pass, Priority 2 — reverts the
+    Aug 14 unconditional-all-6 design, which the third-pass profile found
+    costing 58% of total Gemini time system-wide). 3 real parallel calls per
+    window now, not 18. Still frames, same STILL_FRAME_PROFILE as the screen
+    pass and the same tier-voiced re-examination framing as before — only
+    the fan-out width changed, not the reasoning approach for whichever
+    category actually gets reviewed."""
 
-    async def one(role: SubAgentRole, category: ErrorCategory) -> tuple[ErrorCategory, SubAgentRole, DeepOutput]:
+    async def one(role: SubAgentRole) -> tuple[SubAgentRole, DeepOutput]:
         frames = _sample_role_frames(video_path, window, role)
         content = build_multimodal_content(
             instruction_text=f"Deep review, category={category}, tier={_FIXED_DEEP_TIER} (video seconds {window.start_s:.1f}-{window.end_s:.1f}).",
             frames=frames,
         )
         result = await _run_agent_once(_DEEP_AGENTS[(role, category)], content, DeepOutput)
-        return category, role, result
+        return role, result
 
-    flat = await asyncio.gather(*(one(role, category) for role in _ROLES for category in _CATEGORIES))
-    by_category: dict[ErrorCategory, dict[SubAgentRole, DeepOutput]] = {c: {} for c in _CATEGORIES}
-    for category, role, result in flat:
-        by_category[category][role] = result
-    return by_category
+    results = await asyncio.gather(*(one(role) for role in _ROLES))
+    return dict(results)
 
 
 async def run_error_detection_window(
@@ -233,50 +252,94 @@ async def run_error_detection_window(
     if video_path is None:
         raise FileNotFoundError(f"no local source video found for {video_id!r}")
 
-    # Screen and deep (both stills now, docs/latency_optimization.md's
-    # second pass) run CONCURRENTLY, not sequentially — a window's wall
-    # time is max(screen, deep) instead of screen + deep. Screen's own
-    # opinions aren't consumed further here (deep is unconditional now);
-    # it still runs because it's the cheap tier that populates the graph
-    # fast, and agents/error_detection/agent.py's real-time traceability uses it.
-    _screen_results, deep_by_category = await asyncio.gather(
-        _run_screen_pass_stills(video_path, window),
-        _run_deep_pass_all_categories(video_path, window),
-    )
+    # Screen ALWAYS runs first now — deep depends on its escalation choice,
+    # so this is genuinely sequential (screen, then deep), not the previous
+    # concurrent max(screen, deep). Real, disclosed cost of restoring
+    # escalation: this reintroduces the additive screen+deep wall time the
+    # Aug 14 "second pass" moved away from — but deep is now 3 calls instead
+    # of 18, so total call volume and total Gemini time both still drop; see
+    # docs/latency_optimization.md Fourth pass for the measured net effect.
+    screen_results = await _run_screen_pass_stills(video_path, window)
+
+    # One dict per role — {category: confidence}, from every opinion that
+    # role actually formed (a role omitting a category is a real absence of
+    # signal, not a 0.0 confidence, so it is simply not a key here).
+    category_confidences = [
+        {op.category: op.confidence for op in screen_results[role].opinions} for role in _ROLES
+    ]
+    escalated_category = pick_escalation_candidate(category_confidences)
+
+    deep_results: dict[SubAgentRole, DeepOutput] | None = None
+    if escalated_category is not None:
+        deep_results = await _run_deep_pass_one_category(video_path, window, escalated_category)
+
+    def _screen_opinion(role: SubAgentRole, category: ErrorCategory) -> CategoryOpinion | None:
+        return next((op for op in screen_results[role].opinions if op.category == category), None)
 
     category_results: dict[str, CategoryResult] = {}
     for category in _CATEGORIES:
-        role_outputs = deep_by_category[category]
-        o_values = {role: role_outputs[role].error_present for role in _ROLES}
-        composite_score, is_divergence = aggregate(
-            o_values["temporal"], o_values["spatial"], o_values["procedural"], alpha=alpha_weights, threshold=threshold
-        )
-        assessments = [
-            ErrorDetectionSubAgentAssessment(
-                agent_role=role,
-                tier_used=_FIXED_DEEP_TIER,
-                error_present=role_outputs[role].error_present,
-                confidence=role_outputs[role].confidence,
-                reasoning=role_outputs[role].reasoning,
-                frames_examined=[window.start_frame, window.end_frame],
+        if category == escalated_category and deep_results is not None:
+            # The real, focused deep-tier review — unchanged from before.
+            o_values = {role: deep_results[role].error_present for role in _ROLES}
+            composite_score, is_divergence = aggregate(
+                o_values["temporal"], o_values["spatial"], o_values["procedural"], alpha=alpha_weights, threshold=threshold
             )
-            for role in _ROLES
-        ]
-        category_results[category] = CategoryResult(composite_score=composite_score, is_divergence=is_divergence, assessments=assessments)
+            assessments = [
+                ErrorDetectionSubAgentAssessment(
+                    agent_role=role,
+                    tier_used=_FIXED_DEEP_TIER,
+                    error_present=deep_results[role].error_present,
+                    confidence=deep_results[role].confidence,
+                    reasoning=deep_results[role].reasoning,
+                    frames_examined=[window.start_frame, window.end_frame],
+                )
+                for role in _ROLES
+            ]
+            category_results[category] = CategoryResult(
+                composite_score=composite_score, is_divergence=is_divergence, assessments=assessments, reviewed="deep"
+            )
+        else:
+            # Not escalated this window — the screen pass's own per-role
+            # suspected/confidence stands in as the real verdict, aggregated
+            # through the identical weighted formula. This is the
+            # pre-restructuring design's own documented fallback (see
+            # pick_escalation_candidate's docstring), not a new invention.
+            # A role that formed no opinion on this category contributes
+            # suspected=False at confidence 0.0 — real absence of signal,
+            # not fabricated agreement.
+            opinions = {role: _screen_opinion(role, category) for role in _ROLES}
+            o_values = {role: bool(op and op.suspected) for role, op in opinions.items()}
+            composite_score, is_divergence = aggregate(
+                o_values["temporal"], o_values["spatial"], o_values["procedural"], alpha=alpha_weights, threshold=threshold
+            )
+            assessments = [
+                ErrorDetectionSubAgentAssessment(
+                    agent_role=role,
+                    tier_used=_FIXED_DEEP_TIER,  # schema has no "screen" tier — see CategoryResult docstring
+                    error_present=o_values[role],
+                    confidence=(opinions[role].confidence if opinions[role] else 0.0),
+                    reasoning=(f"[screen-pass, not deep-reviewed] {opinions[role].observation}" if opinions[role] else "[screen-pass, not deep-reviewed] no opinion formed on this category"),
+                    frames_examined=[window.start_frame, window.end_frame],
+                )
+                for role in _ROLES
+            ]
+            category_results[category] = CategoryResult(
+                composite_score=composite_score, is_divergence=is_divergence, assessments=assessments, reviewed="screen"
+            )
 
     fired = {c: r for c, r in category_results.items() if r.is_divergence}
     top_category = max(fired, key=lambda c: fired[c].composite_score) if fired else max(
         category_results, key=lambda c: category_results[c].composite_score
     )
     top_result = category_results[top_category]
-    psi = compute_psi(top_category)  # informational now — no longer gates which tier runs
+    psi = compute_psi(top_category)  # informational — describes the top-scoring category, not a tier gate
 
     return ErrorDetectionWindowAssessment(
         window_id=window.window_id,
         start_frame=window.start_frame,
         end_frame=window.end_frame,
         sub_agent_assessments=top_result.assessments,
-        escalated_category=top_category,
+        escalated_category=escalated_category,
         psi=psi,
         tier_used=_FIXED_DEEP_TIER,
         composite_score=top_result.composite_score,
