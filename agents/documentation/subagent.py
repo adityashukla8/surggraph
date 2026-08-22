@@ -25,8 +25,13 @@ section that is genuinely novel:
                         for, and the one with the most real value: a record of
                         what the system raised and whether the team engaged.
   PHYSIOLOGICAL EVENTS  vitals excursions, which a real note would carry.
-  SYSTEM PERFORMANCE    the benchmark, so a reader can weight everything above
-                        by how well the detector actually scored on this case.
+
+NOT INCLUDED: a benchmark/system-performance section. Earlier this ran after
+benchmark_case and reported its score as a trust signal. That made
+documentation depend sequentially on benchmarking for no real reason other
+than that one field, so the two now run concurrently (orchestrator/agent.py)
+and this agent never sees a benchmark result — nothing here is a substitute
+trust signal for it.
 
 DELIBERATELY ABSENT: a "Complications" heading. In an operative note that
 heading means complications that OCCURRED. Ours are hypotheses a model
@@ -45,7 +50,7 @@ from __future__ import annotations
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel, Field
 
-from tools.gemini_model import new_agent_model
+from tools.gemini_model import new_medgemma_model
 
 
 class OperativeNoteDraft(BaseModel):
@@ -54,7 +59,6 @@ class OperativeNoteDraft(BaseModel):
     risks_considered: str  # complications reasoned about, with grounding status
     decision_support: str  # what was proposed and how the surgeon responded
     physiological_events: str  # vitals excursions, or an explicit statement of none
-    system_performance: str  # the benchmark, in plain language
     summary: str  # 2-3 sentences a clinician would read first
     # Anything the graph could not support. Stated rather than silently omitted,
     # so a reader knows what this document does not cover.
@@ -69,7 +73,7 @@ You are given the complete case graph: the activities observed in order, the
 technique errors the detector flagged, the complications reasoned about and
 whether each was tied to real retrieved literature, the corrective plans
 proposed and whether the surgeon acknowledged or dismissed them, any divergence
-alerts, physiological deviations, and the case's own benchmark score.
+alerts, and physiological deviations.
 
 THE FRAMING RULE, WHICH MATTERS MORE THAN ANYTHING ELSE HERE:
 
@@ -83,10 +87,12 @@ Every clinical statement must be attributable to what actually produced it.
           supported by retrieved literature."
   NEVER  "The patient is at risk of bladder neck contracture."
 
-Nothing here is surgeon-confirmed. A detection may be a false positive — the
-benchmark section will often show exactly that. A complication is a hypothesis
-a model generated, not a finding. If you write a sentence a reader could take
-as confirmed clinical fact, you have made the document unsafe.
+Nothing here is surgeon-confirmed. A detection may be a false positive — this
+document has no access to this case's self-benchmark score to know either way,
+which is exactly why every finding must be framed as automated and unconfirmed
+rather than asserted. A complication is a hypothesis a model generated, not a
+finding. If you write a sentence a reader could take as confirmed clinical
+fact, you have made the document unsafe.
 
 SECTIONS:
 
@@ -96,7 +102,7 @@ SECTIONS:
 
 - technique_observations: the flagged errors, grouped sensibly, each with its
   OCHRA category and severity. Say plainly that these are automated and
-  unconfirmed. If the benchmark shows poor precision, say so here.
+  unconfirmed.
 
 - risks_considered: complications the system reasoned about. For each, state
   whether it was literature-grounded or not. An ungrounded one is still worth
@@ -109,15 +115,12 @@ SECTIONS:
 - physiological_events: vitals deviations with times. If there were none, say
   so explicitly rather than omitting the section.
 
-- system_performance: the benchmark, in plain clinical language. If precision
-  was poor, that is the most important sentence in the document, because it
-  tells the reader how much to trust everything above.
-
 - summary: two or three sentences a clinician would read first.
 
 - limitations: what this record does not cover. Be specific — blood loss,
-  specimens, disposition, and surgeon-confirmed findings are all absent, and
-  the patient data is synthetic. Do not pad this with generalities.
+  specimens, disposition, surgeon-confirmed findings, and this case's own
+  self-benchmark score are all absent, and the patient data is synthetic. Do
+  not pad this with generalities.
 
 Write in clinical register: precise, plain, no hedging beyond what the evidence
 warrants and no drama. Every section is prose, not bullet fragments."""
@@ -126,7 +129,7 @@ warrants and no drama. Every section is prose, not bullet fragments."""
 def build_subagent() -> LlmAgent:
     return LlmAgent(
         name="documentation",
-        model=new_agent_model(),
+        model=new_medgemma_model(),
         instruction=_INSTRUCTION,
         output_schema=OperativeNoteDraft,
     )

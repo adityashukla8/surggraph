@@ -201,9 +201,13 @@ def divergence_detection(index: GraphIndex, proposal_id: str, lookback: int = DI
 
 
 def documentation(index: GraphIndex) -> dict[str, Any]:
-    """The entire case graph. The operative note is a narrative of everything
-    that happened, so unlike every other slice this one deliberately does not
-    filter — the whole point is that the graph already contains the record."""
+    """The entire case graph, minus benchmark nodes. The operative note is a
+    narrative of everything that happened, so unlike every other slice this
+    one deliberately does not filter by type or recency — the whole point is
+    that the graph already contains the record. benchmark is the one
+    exception: documentation now runs concurrently with benchmark_case
+    (agents/orchestrator/agent.py), not after it, specifically so the note no
+    longer depends on that score existing yet."""
     return {
         "role": "documentation",
         "patient_twin": index.snapshot_slot("patient_twin"),
@@ -215,7 +219,6 @@ def documentation(index: GraphIndex) -> dict[str, Any]:
         "verification_blocks": _node_views(sorted(index.of_type("verification_block"), key=lambda n: n.timestamp)),
         "action_outcomes": _node_views(sorted(index.of_type("action_outcome"), key=lambda n: n.timestamp)),
         "literature": _node_views(index.of_type("literature_evidence")),
-        "benchmark": _node_views(index.of_type("benchmark")),
         "entities": _node_views(index.of_type("entity")),
     }
 

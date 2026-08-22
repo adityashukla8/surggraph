@@ -404,17 +404,27 @@ async def open_case(
         # divergences that matter most, the late ones.
         await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
 
-        # Post-case, in order: the case grades itself, then documents itself.
-        # Documentation runs second so the draft can report the benchmark and
-        # tell a reader how much to trust everything above it.
-        try:
-            await benchmark_case(case_id, video_id, start_s, end_s)
-        except Exception:
-            logger.exception("case %s: benchmarking failed — the case still closes", case_id)
-        try:
-            await draft_note(case_id)
-        except Exception:
-            logger.exception("case %s: drafting failed — the case still closes", case_id)
+        # Post-case: the case grades itself and documents itself concurrently.
+        # These used to run in sequence (benchmark then documentation) so the
+        # note could report the benchmark score as a trust signal; that
+        # coupling was removed (system_performance dropped from the note, see
+        # agents/documentation/subagent.py) specifically so this could be
+        # parallel — documentation no longer reads anything benchmark_case
+        # writes. Each failure is caught independently so one failing never
+        # blocks or is masked by the other.
+        async def _run_benchmark() -> None:
+            try:
+                await benchmark_case(case_id, video_id, start_s, end_s)
+            except Exception:
+                logger.exception("case %s: benchmarking failed — the case still closes", case_id)
+
+        async def _run_documentation() -> None:
+            try:
+                await draft_note(case_id)
+            except Exception:
+                logger.exception("case %s: drafting failed — the case still closes", case_id)
+
+        await asyncio.gather(_run_benchmark(), _run_documentation())
     finally:
         await event_bus.close_bus(case_id)
 
