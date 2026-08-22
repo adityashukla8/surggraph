@@ -287,22 +287,88 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
           <div className="aa__timeline">
             {items.map((item) => {
               const open = openId === item.id;
+              // The collapsed row itself gets a one-click yes/no for whichever
+              // items actually have a pending human decision — a surgeon
+              // scanning a long timeline shouldn't have to open every proposal
+              // just to acknowledge it. Kept to exactly the two kinds that
+              // HAVE a decision (proposal, documentation); an alert or a
+              // benchmark has nothing here to say yes or no to.
+              const quickAccept =
+                item.kind === "proposal"
+                  ? () => run(item.id, () => acknowledgeProposal(item.node.node_id, "acknowledged"))
+                  : item.kind === "documentation"
+                    ? () => run(item.id, () => approveDocumentation("approved"))
+                    : null;
+              const quickReject =
+                item.kind === "proposal"
+                  ? () => run(item.id, () => acknowledgeProposal(item.node.node_id, "dismissed"))
+                  : item.kind === "documentation"
+                    ? () => run(item.id, () => approveDocumentation("rejected"))
+                    : null;
+              const isBusy = busy === item.id;
+
               return (
                 <div key={item.id} className={`aa__item aa__item--${item.severity}${item.outcome ? " aa__item--resolved" : ""}`}>
-                  <button className="aa__row" onClick={() => setOpenId(open ? null : item.id)}>
-                    <span className="aa__row-tags">
-                      <span className="aa__time">{timeOf(item.at)}</span>
-                      <span className={`aa__tag aa__tag--${item.kind}`}>
-                        {KIND_ICON[item.kind]} {KIND_LABEL[item.kind]}
+                  <div className="aa__row-wrap">
+                    {/* Not a <button> any more — it now holds real <button>
+                        children (the quick tick/cross below), and a button
+                        cannot nest a button. role="button" + a key handler
+                        keeps it exactly as accessible as it was. */}
+                    <div
+                      className="aa__row"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setOpenId(open ? null : item.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setOpenId(open ? null : item.id);
+                        }
+                      }}
+                    >
+                      <span className="aa__row-tags">
+                        <span className="aa__time">{timeOf(item.at)}</span>
+                        <span className={`aa__tag aa__tag--${item.kind}`}>
+                          {KIND_ICON[item.kind]} {KIND_LABEL[item.kind]}
+                        </span>
+                        <span className={`aa__sev aa__sev--${item.severity}`}>{item.severity}</span>
+                        <span className="aa__chevron">{open ? "▾" : "▸"}</span>
                       </span>
-                      <span className={`aa__sev aa__sev--${item.severity}`}>{item.severity}</span>
-                      <span className="aa__chevron">{open ? "▾" : "▸"}</span>
-                    </span>
-                    <span className="aa__summary">
-                      {item.summary}
-                      {item.outcome && <span className="aa__outcome"> · {item.outcome}</span>}
-                    </span>
-                  </button>
+                      <span className="aa__summary">
+                        {item.summary}
+                        {item.outcome && <span className="aa__outcome"> · {item.outcome}</span>}
+                      </span>
+                    </div>
+
+                    {!item.outcome && quickAccept && quickReject && (
+                      <span className="aa__quick-actions">
+                        <button
+                          className="aa__quick-btn aa__quick-btn--yes"
+                          disabled={isBusy}
+                          title={item.kind === "documentation" ? "Approve" : "Acknowledge"}
+                          aria-label={item.kind === "documentation" ? "Approve" : "Acknowledge"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            quickAccept();
+                          }}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          className="aa__quick-btn aa__quick-btn--no"
+                          disabled={isBusy}
+                          title={item.kind === "documentation" ? "Reject" : "Dismiss"}
+                          aria-label={item.kind === "documentation" ? "Reject" : "Dismiss"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            quickReject();
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    )}
+                  </div>
 
                   {open && (
                     <div className="aa__detail">
@@ -493,7 +559,6 @@ function DocumentationDetail({
     ["Risks considered", "risks_considered"],
     ["Decision support", "decision_support"],
     ["Physiological events", "physiological_events"],
-    ["System performance", "system_performance"],
   ];
 
   return (

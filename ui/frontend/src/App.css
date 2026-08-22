@@ -742,9 +742,15 @@
 @keyframes aa-slide-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .aa__item { animation: aa-slide-in 160ms ease-out; }
 
+/* Row + quick-action cluster side by side. The row itself is no longer the
+   full-width clickable element — .aa__quick-actions sits beside it so a tick
+   or a cross is a real sibling <button>, not a button nested inside one. */
+.aa__row-wrap { display: flex; align-items: stretch; gap: 2px; }
+
 .aa__row {
   display: block;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 7px 2px;
   background: none;
   border: 0;
@@ -755,6 +761,39 @@
   color: var(--text-primary);
 }
 .aa__row:hover { background: var(--page); }
+.aa__row:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
+
+/* The one-click yes/no on the collapsed row, for whichever item kinds
+   actually carry a pending human decision (proposal, documentation). Same
+   semantic colours the rest of the app already uses for pass/fail
+   (dashboard connection status, the verification gate's own pass/block
+   styling) — not a new accent invented for this. */
+.aa__quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 0 4px;
+}
+.aa__quick-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.aa__quick-btn:disabled { opacity: 0.45; cursor: default; }
+.aa__quick-btn--yes { color: var(--status-good); }
+.aa__quick-btn--yes:hover:not(:disabled) { background: color-mix(in srgb, var(--status-good) 16%, var(--surface-1)); border-color: var(--status-good); }
+.aa__quick-btn--no { color: var(--status-critical); }
+.aa__quick-btn--no:hover:not(:disabled) { background: color-mix(in srgb, var(--status-critical) 16%, var(--surface-1)); border-color: var(--status-critical); }
 
 /* Shared with the Error Detection feed's .feed__clock — one declaration for
    both panels so the two row formats cannot drift apart. */
