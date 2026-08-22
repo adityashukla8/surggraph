@@ -1926,9 +1926,11 @@ name = "surggraph"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "google-adk" },
+    { name = "google-auth" },
     { name = "google-cloud-aiplatform", extra = ["adk", "agent-engines"] },
     { name = "google-cloud-firestore" },
     { name = "google-genai" },
@@ -1955,9 +1957,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "google-adk" },
+    { name = "google-auth" },
     { name = "google-cloud-aiplatform", extras = ["agent-engines", "adk"], specifier = ">=1.112" },
     { name = "google-cloud-firestore", specifier = ">=2.28" },
     { name = "google-genai" },

@@ -24,7 +24,7 @@ from __future__ import annotations
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel, Field
 
-from tools.gemini_model import new_agent_model
+from tools.gemini_model import new_medgemma_model
 
 
 class SelectedAction(BaseModel):
@@ -83,7 +83,7 @@ summary: ONE short sentence naming the corrective intent overall."""
 def build_subagent() -> LlmAgent:
     return LlmAgent(
         name="corrective_replanning",
-        model=new_agent_model(),
+        model=new_medgemma_model(),
         instruction=_INSTRUCTION,
         output_schema=CorrectiveProposal,
     )
