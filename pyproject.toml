@@ -15,7 +15,6 @@ dependencies = [
     "numpy",
     "requests",
     "httpx",
-    "aiohttp",
     "google-auth",
     "pydicom",
     "SimpleITK",

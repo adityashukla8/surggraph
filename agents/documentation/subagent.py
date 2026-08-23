@@ -50,7 +50,7 @@ from __future__ import annotations
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel, Field
 
-from tools.gemini_model import new_medgemma_model
+from tools.gemini_model import new_agent_model
 
 
 class OperativeNoteDraft(BaseModel):
@@ -129,7 +129,7 @@ warrants and no drama. Every section is prose, not bullet fragments."""
 def build_subagent() -> LlmAgent:
     return LlmAgent(
         name="documentation",
-        model=new_medgemma_model(),
+        model=new_agent_model(),
         instruction=_INSTRUCTION,
         output_schema=OperativeNoteDraft,
     )

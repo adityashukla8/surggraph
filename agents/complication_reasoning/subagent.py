@@ -33,7 +33,7 @@ from __future__ import annotations
 from google.adk.agents import LlmAgent
 from pydantic import BaseModel, Field
 
-from tools.gemini_model import new_medgemma_model
+from tools.gemini_model import new_agent_model
 
 
 class LiteratureQuery(BaseModel):
@@ -183,7 +183,7 @@ together. Not a restatement of the candidates."""
 def build_query_agent() -> LlmAgent:
     return LlmAgent(
         name="complication_query",
-        model=new_medgemma_model(),
+        model=new_agent_model(),
         instruction=_QUERY_INSTRUCTION,
         output_schema=LiteratureQuery,
     )
@@ -192,7 +192,7 @@ def build_query_agent() -> LlmAgent:
 def build_reasoning_agent() -> LlmAgent:
     return LlmAgent(
         name="complication_reasoning",
-        model=new_medgemma_model(),
+        model=new_agent_model(),
         instruction=_REASON_INSTRUCTION,
         output_schema=ComplicationAssessment,
     )

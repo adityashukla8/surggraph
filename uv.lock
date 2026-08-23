@@ -1926,7 +1926,6 @@ name = "surggraph"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiohttp" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "google-adk" },
@@ -1957,7 +1956,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
     { name = "google-adk" },
