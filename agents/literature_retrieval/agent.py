@@ -1,11 +1,24 @@
 """Literature Retrieval Agent — docs/agentic_workflow.md §3 agent 5.
 
-Not an LLM agent. It is a tool wrapper around one Europe PMC call, treated as
+Not an LLM agent. It is a tool wrapper around three independent literature
+APIs (Europe PMC, PubMed E-utilities, Semantic Scholar Graph API), treated as
 an agent for graph-provenance and observability reasons: every citation that
 ends up supporting a complication or a corrective proposal has to be traceable
 to a real retrieval with a real query, and giving that retrieval its own agent
 node and its own graph writes is what makes the evidence chain inspectable
 rather than asserted.
+
+THREE SOURCES, ONE QUERY, DIFFERENT SYNTAX EACH. The calling agent composes
+one query set in Europe PMC's boolean-field syntax (see
+agents/complication_reasoning/subagent.py's _QUERY_INSTRUCTION). Rather than
+teach it three query dialects for what's fundamentally the same decision
+("what to search for"), each source module (tools/pubmed_eutils.py,
+tools/semantic_scholar_api.py) retags the same query into its own real syntax
+— a deterministic, mechanical transformation of a decision already made, the
+same category as the RRF math below, not a new judgment call. PubMed's is
+load-bearing, not cosmetic: verified live that sending it Europe PMC's syntax
+untagged lets PubMed's automatic term mapping silently drift onto the wrong
+medical concept (see that module's docstring for the real example).
 
 THE QUERY IS NEVER FORMULATED HERE. The caller — Complication Reasoning, or
 Corrective Replanning when it needs evidence beyond what the complication
@@ -14,10 +27,11 @@ module maps an error category to a search term, because that mapping is exactly
 the hand-authored lookup table the design forbids. This module takes a string
 and returns papers.
 
-CACHING IS PER CASE AND KEYED BY QUERY. Two different errors in one case
-frequently reason toward the same literature; re-fetching costs a network round
-trip and returns identical results. The cache is keyed by the hash of the query
-text, so a genuinely different question always goes out to the network.
+CACHING IS PER CASE, PER SOURCE, AND KEYED BY QUERY. Two different errors in
+one case frequently reason toward the same literature; re-fetching costs a
+network round trip and returns identical results. The cache is keyed by the
+hash of the query text, so a genuinely different question always goes out to
+the network.
 """
 
 from __future__ import annotations
@@ -27,10 +41,13 @@ import hashlib
 import html
 import logging
 import re
+from typing import Any
 
 from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
 from tools.europepmc_rag import search_literature
+from tools.pubmed_eutils import search_pubmed
+from tools.semantic_scholar_api import search_semantic_scholar
 from tools.state_tools import apply_state_patches
 
 logger = logging.getLogger(__name__)
@@ -61,10 +78,11 @@ def _clean(text: str | None) -> str:
     # so stripping before unescaping would leave them behind.
     return _TAG_RE.sub("", html.unescape(text)).strip()
 
-# Per-case, per-query cache: {(case_id, query_hash): [hit, ...]}. In-process is
-# the right scope — one case is owned by one orchestrator task, and the cache's
-# whole purpose is to avoid repeat fetches WITHIN a case.
-_cache: dict[tuple[str, str], list[dict]] = {}
+# Per-case, per-source, per-query cache: {(case_id, source_name, query_hash):
+# [hit, ...]}. In-process is the right scope — one case is owned by one
+# orchestrator task, and the cache's whole purpose is to avoid repeat fetches
+# WITHIN a case.
+_cache: dict[tuple[str, str, str], list[dict]] = {}
 
 # Retry policy from docs §9: two attempts, then an empty result. Retrieval
 # failing is not fatal — the caller proceeds and marks the complication
@@ -90,23 +108,37 @@ PER_QUERY_LIMIT = 25
 RRF_K = 60
 
 
+# One (source_name, search_fn) per real API. Each fn takes (query, k) in
+# Europe PMC's own syntax and does its own retagging internally — the caller
+# below never needs to know the three sources disagree on query syntax.
+_SOURCES: list[tuple[str, Any]] = [
+    ("europepmc", lambda q, k: search_literature(q, k=k, live=True).get("hits", [])),
+    ("pubmed", search_pubmed),
+    ("semantic_scholar", search_semantic_scholar),
+]
+
+
 async def retrieve(
     case_id: str,
     queries: list[str],
     top_n: int = DEFAULT_TOP_N,
     parent_node_id: str | None = None,
 ) -> tuple[list[dict], list[str], bool]:
-    """Runs several short queries in parallel and merges their results.
+    """Runs several short queries against three independent sources in
+    parallel and merges every resulting ranked list.
 
-    One long query does not rank badly on this API — it starves the ranker.
-    Every term is an AND clause, so a precise-sounding query eliminates the
-    papers it was meant to find. Several short queries along independent axes
-    each return real candidates, and merging them is where the precision comes
-    back: a paper surfaced by more than one angle is almost certainly on topic.
+    One long query does not rank badly on these APIs — it starves the ranker.
+    Every term is effectively an AND clause (Europe PMC and PubMed both work
+    this way once retagged; see tools/pubmed_eutils.py), so a precise-sounding
+    query eliminates the papers it was meant to find. Several short queries
+    along independent axes each return real candidates, and merging them is
+    where the precision comes back: a paper surfaced by more than one angle,
+    or by more than one source entirely, is almost certainly on topic.
 
     Ranking is Reciprocal Rank Fusion, which needs only each paper's POSITION
-    within each result list. That matters because a live Europe PMC search
-    returns no relevance score, so there is nothing to average or normalise.
+    within each result list — exactly why it's the right tool for merging
+    genuinely different ranking algorithms across three unrelated APIs, none
+    of which return a score comparable to the others.
 
     Returns (hits, node_ids, evidence_available).
     """
@@ -114,19 +146,24 @@ async def retrieve(
     if not wanted:
         return [], [], False
 
-    # Genuinely concurrent — these are independent network calls, and running
-    # four sequentially would add seconds to a path that already waits on two
-    # Gemini calls.
-    results = await asyncio.gather(
-        *(asyncio.to_thread(_search_one, case_id, q) for q in wanted), return_exceptions=True
-    )
+    # Genuinely concurrent across queries AND sources — these are all
+    # independent network calls, and running query*source pairs sequentially
+    # would add real seconds to a path that already waits on two Gemini calls.
+    tasks = [
+        (query, source_name, asyncio.to_thread(_search_one, case_id, query, source_name, search_fn))
+        for query in wanted
+        for source_name, search_fn in _SOURCES
+    ]
+    results = await asyncio.gather(*(t[2] for t in tasks), return_exceptions=True)
 
     ranked_lists: list[list[dict]] = []
-    for query, result in zip(wanted, results):
+    for (query, source_name, _), result in zip(tasks, results):
         if isinstance(result, Exception):
-            logger.warning("literature[%s]: query %r failed: %s", case_id, query[:60], type(result).__name__)
+            logger.warning(
+                "literature[%s]: %s query %r failed: %s", case_id, source_name, query[:60], type(result).__name__
+            )
             continue
-        logger.info("literature[%s]: %d hit(s) for %r", case_id, len(result), query[:60])
+        logger.info("literature[%s]: %s: %d hit(s) for %r", case_id, source_name, len(result), query[:60])
         ranked_lists.append(result)
 
     merged = _reciprocal_rank_fusion(ranked_lists)[:top_n]
@@ -135,7 +172,7 @@ async def retrieve(
 
     node_ids_written = await _write_literature_nodes(case_id, merged, parent_node_id)
     logger.info(
-        "literature[%s]: %d queries -> %d unique papers -> top %d (%d hit by >1 query)",
+        "literature[%s]: %d query/source pair(s) -> %d unique papers -> top %d (%d hit by >1)",
         case_id,
         len(ranked_lists),
         sum(len(r) for r in ranked_lists),
@@ -145,22 +182,29 @@ async def retrieve(
     return merged, node_ids_written, True
 
 
-def _search_one(case_id: str, query: str) -> list[dict]:
-    """One query, cached per case. Blocking — the caller runs these in threads."""
-    cache_key = (case_id, query_hash(query))
+def _search_one(case_id: str, query: str, source_name: str, search_fn: Any) -> list[dict]:
+    """One (query, source) pair, cached per case. Blocking — the caller runs
+    these in threads."""
+    cache_key = (case_id, source_name, query_hash(query))
     if cache_key in _cache:
         return _cache[cache_key]
-    hits = search_literature(query, k=PER_QUERY_LIMIT, live=True).get("hits", [])
+    hits = search_fn(query, PER_QUERY_LIMIT)
     for hit in hits:
         hit["query_used"] = query
+        hit.setdefault("source", source_name)
     _cache[cache_key] = hits
     return hits
 
 
 def _paper_key(hit: dict) -> str:
-    """Identity across queries. The same paper must collapse to one entry or
-    the whole point of boosting multi-query hits is lost."""
-    return str(hit.get("doc_id") or hit.get("pmcid") or hit.get("url") or hit.get("title", ""))
+    """Identity across queries AND sources. The same paper found via Europe
+    PMC, PubMed, and Semantic Scholar must collapse to one entry, or the whole
+    point of a second/third source — boosting a paper multiple independent
+    systems agree on — is lost. DOI is the one identifier meaningfully shared
+    across all three; each source's own native id (doc_id/pmcid) never
+    matches another source's, so it's tried only as a fallback for whichever
+    source didn't return a DOI for this particular paper."""
+    return str(hit.get("doi") or hit.get("doc_id") or hit.get("pmcid") or hit.get("url") or hit.get("title", ""))
 
 
 def _reciprocal_rank_fusion(ranked_lists: list[list[dict]]) -> list[dict]:
@@ -168,14 +212,17 @@ def _reciprocal_rank_fusion(ranked_lists: list[list[dict]]) -> list[dict]:
 
     A paper at position 1 of one list scores 1/(60+1); appearing in three lists
     accumulates three such terms. So a paper found by several independent
-    angles outranks one that topped a single list — which is exactly the signal
-    we want, since agreement between differently-phrased queries is the best
-    available evidence of topicality when no relevance score exists.
+    angles — or by more than one of the three underlying APIs entirely —
+    outranks one that topped a single list. That's exactly the signal we want:
+    agreement between differently-phrased queries, or between unrelated
+    ranking systems, is the best available evidence of topicality when no
+    single comparable relevance score exists across all of them.
     """
     scores: dict[str, float] = {}
     best: dict[str, dict] = {}
     counts: dict[str, int] = {}
     queries_hit: dict[str, list[str]] = {}
+    sources_hit: dict[str, set[str]] = {}
 
     for hits in ranked_lists:
         for rank, hit in enumerate(hits, start=1):
@@ -185,6 +232,7 @@ def _reciprocal_rank_fusion(ranked_lists: list[list[dict]]) -> list[dict]:
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
             counts[key] = counts.get(key, 0) + 1
             queries_hit.setdefault(key, []).append(hit.get("query_used", ""))
+            sources_hit.setdefault(key, set()).add(hit.get("source", "unknown"))
             best.setdefault(key, hit)
 
     merged = []
@@ -193,6 +241,7 @@ def _reciprocal_rank_fusion(ranked_lists: list[list[dict]]) -> list[dict]:
         hit["_rrf_score"] = round(score, 5)
         hit["_query_count"] = counts[key]
         hit["_queries_hit"] = queries_hit[key]
+        hit["_sources_hit"] = sorted(sources_hit[key])
         merged.append(hit)
     return merged
 
@@ -222,6 +271,7 @@ async def _write_literature_nodes(case_id: str, hits: list[dict], parent_node_id
                     attrs={
                         "pmcid": hit.get("pmcid"),
                         "doc_id": hit.get("doc_id"),
+                        "doi": hit.get("doi"),
                         "url": hit.get("url"),
                         "journal": hit.get("journal"),
                         "year": hit.get("year"),
@@ -231,6 +281,12 @@ async def _write_literature_nodes(case_id: str, hits: list[dict], parent_node_id
                         # candidate, and that is auditable rather than implied.
                         "queries_hit": hit.get("_queries_hit", []),
                         "query_count": hit.get("_query_count", 1),
+                        # Which of the three real APIs actually returned this
+                        # paper — a paper two independent, unrelated systems
+                        # both surfaced is stronger evidence than one API's
+                        # opinion alone, and that agreement is now visible
+                        # rather than folded silently into one RRF number.
+                        "sources_hit": hit.get("_sources_hit", [hit.get("source", "unknown")]),
                         "rrf_score": hit.get("_rrf_score"),
                         "retrieved_live": True,
                     },

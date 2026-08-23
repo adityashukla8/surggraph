@@ -108,12 +108,14 @@ def _search_live(query: str, k: int) -> list[dict[str, Any]]:
             {
                 "doc_id": r.get("id"),
                 "pmcid": r.get("pmcid"),
+                "doi": r.get("doi"),
                 "title": r["title"],
                 "snippet": r["abstractText"][:500],
                 "score": None,  # live search has no embedding-similarity score
                 "url": f"https://europepmc.org/article/MED/{r.get('id')}" if r.get("id") else None,
                 "year": r.get("pubYear"),
                 "journal": r.get("journalInfo", {}).get("journal", {}).get("title"),
+                "source": "europepmc",
             }
         )
     return hits
