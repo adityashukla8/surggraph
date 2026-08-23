@@ -33,8 +33,10 @@ from agents.hitl.acknowledgment import (
     record_acknowledgment,
 )
 from agents.orchestrator.agent import open_case
+from tools.observability import setup_cloud_observability
 
 load_dotenv()
+setup_cloud_observability("surggraph-orchestrator-service")
 
 app = FastAPI(title="SurgGraph Orchestrator Service")
 
