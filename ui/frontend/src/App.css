@@ -219,39 +219,6 @@
 
 /* Event / retrieval / action log lists */
 
-.event-input__form {
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.event-input__form input {
-  flex: 1 1 auto;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--page);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: var(--font-sans);
-}
-
-.event-input__form button {
-  padding: 8px 14px;
-  border-radius: 6px;
-  border: none;
-  background: var(--series-1);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.event-input__form button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .event-input__feed {
   flex: 1 1 auto;
   min-height: 0;

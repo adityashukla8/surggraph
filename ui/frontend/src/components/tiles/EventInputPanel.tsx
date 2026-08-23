@@ -1,9 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { ReasoningLogEntry } from "../../graph/types";
 
 interface EventInputPanelProps {
   log: ReasoningLogEntry[];
-  onSubmit: (text: string) => Promise<void> | void;
 }
 
 // Matches the real naming convention in agents/error_detection/agent.py
@@ -50,10 +49,7 @@ function videoTime(seconds?: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export function EventInputPanel({ log, onSubmit }: EventInputPanelProps) {
-  const [draft, setDraft] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
+export function EventInputPanel({ log }: EventInputPanelProps) {
   const entries = useMemo(
     () =>
       log
@@ -62,36 +58,12 @@ export function EventInputPanel({ log, onSubmit }: EventInputPanelProps) {
     [log],
   );
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!draft.trim() || submitting) return;
-    setSubmitting(true);
-    try {
-      await onSubmit(draft.trim());
-      setDraft("");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <div className="tile" data-tile="event-input">
       <div className="tile__header">
-        <h3>Manual Event Input / Error Detection Feed</h3>
+        <h3>Error Detection Feed</h3>
       </div>
       <div className="tile__body tile__body--column">
-        <form className="event-input__form" onSubmit={handleSubmit}>
-          <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder='e.g. "blood loss 400 ml", "giving tranexamic acid"'
-            disabled={submitting}
-          />
-          <button type="submit" disabled={submitting || !draft.trim()}>
-            Inject
-          </button>
-        </form>
         <div className="event-input__feed">
           {entries.length === 0 ? (
             <p className="tile__placeholder">No Error Detection activity yet.</p>

@@ -36,17 +36,6 @@ async function openCase(videoId: string): Promise<string> {
   return body.case_id;
 }
 
-async function submitManualEvent(caseId: string, text: string): Promise<void> {
-  const resp = await fetch(`${STATE_SERVICE_URL}/events/manual`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ case_id: caseId, text }),
-  });
-  if (!resp.ok) {
-    throw new Error(`manual event injection failed: ${resp.status}`);
-  }
-}
-
 function App() {
   // null until the user presses play — page load alone is not the trigger.
   // The autonomous pipeline starts on that first play (services/
@@ -88,7 +77,7 @@ function App() {
       <main className="dashboard__grid">
         <VideoPanel videoUrl={RAW_VIDEO_URL} onPlay={handleFirstPlay} />
         <StateGraphPanel nodes={nodes} edges={edges} status={status} error={error} />
-        <EventInputPanel log={log} onSubmit={(text) => (caseId ? submitManualEvent(caseId, text) : Promise.resolve())} />
+        <EventInputPanel log={log} />
         <CaseContextPanel caseId={caseId} nodes={allNodes} />
         <AutonomousActionsPanel
           caseId={caseId}
