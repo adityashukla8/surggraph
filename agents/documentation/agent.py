@@ -170,6 +170,31 @@ async def draft_note(case_id: str) -> str | None:
         logger.warning("documentation[%s]: nothing observed in this case, not drafting", case_id)
         return None
 
+    node_id = node_ids.documentation(case_id)
+
+    # A real status write, not a fake placeholder: drafting is genuinely
+    # underway at this point (the Gemini call below is what's slow), so the
+    # panel has something honest to show for the ~1-2 minutes this takes
+    # instead of going silent. The final write below lands on this same
+    # node_id and overwrites it once the real draft exists.
+    await apply_state_patches(
+        case_id,
+        [
+            (
+                GraphNodePatch(
+                    node_id=node_id,
+                    node_type="documentation",
+                    label="Preparing operative report…",
+                    attrs={"approval_status": "drafting"},
+                    source_agent=SOURCE_AGENT,
+                    source_tool=_SOURCE_TOOL,
+                ),
+                None,
+                "Drafting the operative record",
+            ),
+        ],
+    )
+
     prompt = _format_case(slice_context, index)
     draft: OperativeNoteDraft = await run_llm_agent_once(
         AGENT,
@@ -178,7 +203,6 @@ async def draft_note(case_id: str) -> str | None:
         app_name="surggraph_documentation",
     )
 
-    node_id = node_ids.documentation(case_id)
     await apply_state_patches(
         case_id,
         [

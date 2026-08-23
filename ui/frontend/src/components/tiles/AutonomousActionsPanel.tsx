@@ -59,6 +59,27 @@ interface TimelineItem {
   summary: string;
   outcome: string | null; // set once resolved; shown in the collapsed row
   node: GraphNodePatch;
+  // The real FHIR resource URL, once the write has actually landed — null
+  // until then (proposal/benchmark items never get one). Sourced from the
+  // action_outcome node's own resource_url attr, not asserted here.
+  resourceUrl: string | null;
+  // True only for the documentation item's brief "drafting" state (real
+  // backend status, not fabricated) — no sections exist yet to review and
+  // no decision is possible, so this is neither pending-a-decision nor
+  // resolved. Always false for every other kind.
+  drafting: boolean;
+}
+
+/** Finds the real action_outcome node for an alert or a documentation item,
+ *  by walking action_intent -> action_outcome the same way AlertDetail's
+ *  expanded view already does. Kept as one shared lookup so the collapsed
+ *  row and the expanded detail can never disagree about which write it is. */
+function findResourceUrl(nodes: GraphNodePatch[], intentMatch: (n: GraphNodePatch) => boolean): string | null {
+  const intent = nodes.find((n) => n.node_type === "action_intent" && intentMatch(n));
+  if (!intent) return null;
+  const outcome = nodes.find((n) => n.node_type === "action_outcome" && n.node_id.endsWith(intent.node_id));
+  const url = outcome?.attrs?.resource_url;
+  return typeof url === "string" ? url : null;
 }
 
 const KIND_ICON: Record<ItemKind, string> = { proposal: "⇢", alert: "⚠", documentation: "▤", benchmark: "▦" };
@@ -108,6 +129,8 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         summary: `Corrective proposal · ${n.label}`,
         outcome: ack ? `${ack === "acknowledged" ? "Acknowledged" : "Dismissed"} ${a.acknowledged_at ? timeOf(a.acknowledged_at as string) : ""}`.trim() : null,
         node: n,
+        resourceUrl: null, // a proposal is never itself written to FHIR
+        drafting: false,
       });
     }
 
@@ -120,24 +143,34 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         summary: `Divergence alert · ${a.reasoning ?? n.label}`,
         outcome: a.advisory ? "Advisory — proposal was acknowledged, no external alert" : null,
         node: n,
+        resourceUrl: findResourceUrl(nodes, (x) => x.attrs?.alert_node_id === n.node_id),
+        drafting: false,
       });
     }
 
     if (n.node_type === "documentation") {
       const status = a.approval_status as string | undefined;
+      const drafting = status === "drafting";
       items.push({
         id: n.node_id,
         kind: "documentation",
         at: n.timestamp,
         severity: "low",
-        summary: "Operative note ready for review",
+        summary: drafting ? "Preparing operative report…" : "Operative note ready for review",
         outcome:
-          status && status !== "pending"
+          !drafting && status && status !== "pending"
             ? status === "approved"
               ? "Approved — filed to FHIR"
               : "Rejected — nothing written"
             : null,
         node: n,
+        // Never surfaced while drafting: the node_id is stable across a
+        // case's whole lifetime, so a still-drafting note would otherwise
+        // inherit a PRIOR draft's real resource_url via the same
+        // documentation_node_id match — a stale link on unreviewed content,
+        // caught live while testing the drafting-status write above.
+        resourceUrl: drafting ? null : findResourceUrl(nodes, (x) => x.attrs?.documentation_node_id === n.node_id),
+        drafting,
       });
     }
 
@@ -154,6 +187,8 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         summary: `Case self-graded · macro-F1 ${f1.toFixed(3)} (${vs >= 0 ? "+" : ""}${vs.toFixed(3)} vs CARES)`,
         outcome: null,
         node: n,
+        resourceUrl: null, // a benchmark is never written to FHIR
+        drafting: false,
       });
     }
   }
@@ -165,8 +200,9 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
  *  is never hidden behind a pending proposal. */
 function attentionState(items: TimelineItem[]) {
   const unackAlerts = items.filter((i) => i.kind === "alert" && !i.outcome);
-  const pendingDocs = items.filter((i) => i.kind === "documentation" && !i.outcome);
+  const pendingDocs = items.filter((i) => i.kind === "documentation" && !i.outcome && !i.drafting);
   const pendingProposals = items.filter((i) => i.kind === "proposal" && !i.outcome);
+  const draftingDocs = items.filter((i) => i.kind === "documentation" && i.drafting);
 
   if (unackAlerts.length) return { tone: "high" as const, text: "Divergence alert · unacknowledged", count: unackAlerts.length };
   if (pendingDocs.length) return { tone: "doc" as const, text: "Documentation awaiting review", count: pendingDocs.length };
@@ -176,6 +212,11 @@ function attentionState(items: TimelineItem[]) {
       text: `${pendingProposals.length} proposal${pendingProposals.length > 1 ? "s" : ""} pending acknowledgment`,
       count: pendingProposals.length,
     };
+  // Genuinely in progress (the drafting node is a real status write, see
+  // agents/documentation/agent.py), not a fake "still working" spinner — the
+  // ~1-2 minute drafting step otherwise leaves the banner reading "all clear"
+  // while the system is actually still busy closing out the case.
+  if (draftingDocs.length) return { tone: "doc" as const, text: "Preparing operative report…", count: 0 };
   return { tone: "neutral" as const, text: "System monitoring · all clear", count: 0 };
 }
 
@@ -296,13 +337,13 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
               const quickAccept =
                 item.kind === "proposal"
                   ? () => run(item.id, () => acknowledgeProposal(item.node.node_id, "acknowledged"))
-                  : item.kind === "documentation"
+                  : item.kind === "documentation" && !item.drafting
                     ? () => run(item.id, () => approveDocumentation("approved"))
                     : null;
               const quickReject =
                 item.kind === "proposal"
                   ? () => run(item.id, () => acknowledgeProposal(item.node.node_id, "dismissed"))
-                  : item.kind === "documentation"
+                  : item.kind === "documentation" && !item.drafting
                     ? () => run(item.id, () => approveDocumentation("rejected"))
                     : null;
               const isBusy = busy === item.id;
@@ -366,6 +407,25 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                         >
                           ✕
                         </button>
+                      </span>
+                    )}
+
+                    {/* Only reachable once resolved (resourceUrl only exists
+                        after a real FHIR write lands) — never overlaps with
+                        the tick/cross above, which only show pre-resolution. */}
+                    {item.resourceUrl && (
+                      <span className="aa__quick-actions">
+                        <a
+                          className="aa__quick-btn aa__quick-link"
+                          href={item.resourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Open the real FHIR record"
+                          aria-label="Open the real FHIR record"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          ↗
+                        </a>
                       </span>
                     )}
                   </div>
@@ -561,6 +621,13 @@ function DocumentationDetail({
     ["Physiological events", "physiological_events"],
   ];
 
+  if (item.drafting) {
+    // Nothing to review yet — the Gemini call that produces `sections` is
+    // still in flight. Showing the (empty) section list or the approve/reject
+    // buttons here would invite a click that has nothing real to act on.
+    return <p className="aa__framing">Drafting from the case's full reasoning graph — this usually takes 1-2 minutes.</p>;
+  }
+
   return (
     <>
       <p className="aa__framing">{String(sections.summary ?? "")}</p>
@@ -586,7 +653,17 @@ function DocumentationDetail({
       )}
 
       {item.outcome ? (
-        <div className="aa__resolved-note">{item.outcome}</div>
+        <div className="aa__resolved-note">
+          {item.outcome}
+          {item.resourceUrl ? (
+            <>
+              {" · "}
+              <a href={item.resourceUrl} target="_blank" rel="noreferrer">
+                open record ↗
+              </a>
+            </>
+          ) : null}
+        </div>
       ) : (
         <div className="aa__actions">
           <button className="aa__btn aa__btn--primary" disabled={busy} onClick={() => onAct("approved")}>

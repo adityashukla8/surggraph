@@ -82,7 +82,7 @@ function App() {
       <header className="dashboard__header">
         <h1>SurgGraph</h1>
         <span className={`dashboard__status dashboard__status--${status}`}>
-          {status === "idle" ? "press play to begin" : `state service: ${status}`}
+          {status === "idle" ? "Play the video to begin" : `state service: ${status}`}
         </span>
       </header>
       <main className="dashboard__grid">

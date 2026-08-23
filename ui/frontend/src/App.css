@@ -795,6 +795,12 @@
 .aa__quick-btn--no { color: var(--status-critical); }
 .aa__quick-btn--no:hover:not(:disabled) { background: color-mix(in srgb, var(--status-critical) 16%, var(--surface-1)); border-color: var(--status-critical); }
 
+/* A real FHIR record link, once one exists — same accent already used for
+   jumping to a node in the graph (.aa__graph-link) and for row focus, so this
+   reads as "navigate somewhere real" rather than a third quick-action color. */
+.aa__quick-link { color: var(--series-1); text-decoration: none; }
+.aa__quick-link:hover { background: color-mix(in srgb, var(--series-1) 16%, var(--surface-1)); border-color: var(--series-1); }
+
 /* Shared with the Error Detection feed's .feed__clock — one declaration for
    both panels so the two row formats cannot drift apart. */
 .aa__time, .feed__clock { font-family: var(--font-mono); font-size: 9.5px; color: var(--text-muted); }
