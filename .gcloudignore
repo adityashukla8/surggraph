@@ -1,0 +1,34 @@
+# Controls what `gcloud run deploy --source`/`gcloud builds submit` uploads
+# to Cloud Build — a separate, earlier step than the Docker build itself.
+# Deliberately NOT derived from .gitignore (gcloud's default when this file
+# is absent): .gitignore excludes data/video/* (correctly, for git — that
+# media should never be committed), but the orchestrator's vision agents read
+# video frames directly off local disk at runtime (tools/video_utils.py::
+# _find_source_video, no GCS fallback) — confirmed live: deploying with the
+# auto-derived .gcloudignore made every case fail with "no source video found
+# for 'video_01'" because the file never even reached Cloud Build, let alone
+# the image. data/video/ and data/annotations/ (used by the benchmark agent's
+# ground-truth comparison) are intentionally left uploadable here.
+
+.venv/
+.uv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.github/
+
+node_modules/
+ui/frontend/dist/
+ui/frontend/.vite/
+
+data/mri/
+data/runtime/
+
+.env
+.env.*
+!.env.example
+*.key.json
+service-account*.json
+
+*.log

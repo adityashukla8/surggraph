@@ -1,0 +1,35 @@
+# Never needed inside the container — rebuilt/reinstalled at build time.
+.venv/
+.uv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.github/
+
+# Frontend build tooling — only ui/frontend/Dockerfile's own build stage needs
+# node_modules, and it installs fresh via npm ci rather than copying this.
+node_modules/
+ui/frontend/dist/
+ui/frontend/.vite/
+
+# data/video/ is NOT excludable: state_service's browser-facing stream reads
+# from GCS (services/state_service/gcs_video.py), but the orchestrator's
+# vision agents (Perception, Error Detection, etc.) read individual frames
+# via cv2.VideoCapture directly off local disk (tools/video_utils.py::
+# _find_source_video) — no GCS fallback exists for that path. Confirmed live:
+# omitting it here made a deployed orchestrator fail every case with
+# "no source video found for 'video_01'". Costs state_service's image ~800MB
+# of unused space it doesn't need; accepted for now rather than splitting the
+# shared Dockerfile over it.
+data/mri/
+data/runtime/
+
+# Secrets — never ship a real .env into an image; Cloud Run env vars replace it.
+.env
+.env.*
+!.env.example
+*.key.json
+service-account*.json
+
+*.log
