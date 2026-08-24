@@ -96,6 +96,9 @@
   border-radius: 8px;
   background: linear-gradient(135deg, var(--home-accent), #59c3e6);
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .home__nav-links {
@@ -377,7 +380,11 @@
   padding: 11px 14px;
   border-radius: 10px;
   background: #fff;
-  border: 1.5px solid var(--step-color, var(--home-accent));
+  border: 1.5px solid var(--home-border);
+  transition: border-color 0.15s;
+}
+.home__example-step:hover {
+  border-color: var(--step-color, var(--home-accent));
 }
 .home__example-step-label {
   display: block;
@@ -572,10 +579,14 @@
 .home__step-card {
   border-radius: 16px;
   padding: 24px;
-  background: color-mix(in srgb, var(--step-color, var(--home-accent)) 3%, #fff);
-  border: 1px solid color-mix(in srgb, var(--step-color, var(--home-accent)) 13%, var(--home-border));
+  background: #fff;
+  border: 1px solid var(--home-border);
   display: flex;
   flex-direction: column;
+  transition: border-color 0.15s;
+}
+.home__step-card:hover {
+  border-color: var(--step-color, var(--home-accent));
 }
 
 .home__step-num {

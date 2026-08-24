@@ -8,9 +8,12 @@ export function Hero() {
         <div>
           <span className="home__badge">✦ All Things Agentic Hackathon • Taskmaster Track</span>
           <h1 className="home__hero-headline">
-            <span className="home__hero-headline-accent">Autonomous Surgical Safety System</span> Improving Patient
-            Outcomes and Surgeon Efficiency
+            <span className="home__hero-headline-accent">Autonomous Surgical Safety System</span> 
           </h1>
+          <h2>Improving Patient
+            Outcomes and Surgeon Efficiency
+          </h2>
+          <br></br>
 
           <div className="home__hero-flow">
             <span className="home__hero-flow-lead">SurgGraph tracks surgery trajectory in real-time</span>
