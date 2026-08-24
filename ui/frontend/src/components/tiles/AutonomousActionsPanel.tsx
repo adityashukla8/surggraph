@@ -38,17 +38,19 @@ interface Props {
 }
 
 type Severity = "low" | "medium" | "high";
-type ItemKind = "proposal" | "alert" | "documentation" | "benchmark";
+type ItemKind = "proposal" | "alert" | "documentation" | "benchmark" | "model_armor";
 
 /** The category label shown as a pastel tag. Colours follow the graph's own
  *  node-kind palette so an item here and its node there read as the same
  *  thing — yellow for corrective proposals, red for divergence, blue for the
- *  record, brown for the post-case scorecard. */
+ *  record, brown for the post-case scorecard, green for the content-safety
+ *  gate (matching model_armor_screen's own graph outline colour). */
 const KIND_LABEL: Record<ItemKind, string> = {
   proposal: "Corrective Proposal",
   alert: "Divergence Alert",
   documentation: "Operative Note",
   benchmark: "Self-Benchmark",
+  model_armor: "Model Armor",
 };
 
 interface TimelineItem {
@@ -82,7 +84,7 @@ function findResourceUrl(nodes: GraphNodePatch[], intentMatch: (n: GraphNodePatc
   return typeof url === "string" ? url : null;
 }
 
-const KIND_ICON: Record<ItemKind, string> = { proposal: "⇢", alert: "⚠", documentation: "▤", benchmark: "▦" };
+const KIND_ICON: Record<ItemKind, string> = { proposal: "⇢", alert: "⚠", documentation: "▤", benchmark: "▦", model_armor: "⛨" };
 
 function timeOf(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -151,18 +153,30 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
     if (n.node_type === "documentation") {
       const status = a.approval_status as string | undefined;
       const drafting = status === "drafting";
+      const blockedByArmor = status === "blocked";
       items.push({
         id: n.node_id,
         kind: "documentation",
         at: n.timestamp,
-        severity: "low",
-        summary: drafting ? "Preparing operative report…" : "Operative note ready for review",
+        // As serious as a blocked write anywhere else — the whole point of
+        // screening BEFORE a surgeon can approve is that it not read as a
+        // routine "ready for review" row.
+        severity: blockedByArmor ? "high" : "low",
+        summary: drafting
+          ? "Preparing operative report…"
+          : blockedByArmor
+            ? "Operative note blocked by Model Armor"
+            : "Operative note ready for review",
+        // "blocked" behaves like "pending" here, not like a resolved
+        // outcome: Approve is gone, but Reject still is, and a resolved-
+        // looking row with no way to act on it would strand the item. The
+        // block itself is conveyed by `summary` and `severity` instead.
         outcome:
-          !drafting && status && status !== "pending"
-            ? status === "approved"
+          drafting || status === "pending" || blockedByArmor
+            ? null
+            : status === "approved"
               ? "Approved — filed to FHIR"
-              : "Rejected — nothing written"
-            : null,
+              : "Rejected — nothing written",
         node: n,
         // Never surfaced while drafting: the node_id is stable across a
         // case's whole lifetime, so a still-drafting note would otherwise
@@ -171,6 +185,30 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         // caught live while testing the drafting-status write above.
         resourceUrl: drafting ? null : findResourceUrl(nodes, (x) => x.attrs?.documentation_node_id === n.node_id),
         drafting,
+      });
+    }
+
+    if (n.node_type === "model_armor_screen") {
+      const status = a.status as string | undefined;
+      const blocked = status === "blocked";
+      const screening = status === "screening";
+      items.push({
+        id: n.node_id,
+        kind: "model_armor",
+        at: n.timestamp,
+        // A blocked write is as serious as an unacknowledged divergence
+        // alert — same escalation the graph node's own colour already makes
+        // (see palette.ts's model_armor_screen status override).
+        severity: blocked ? "high" : "low",
+        summary: "Model Armor screening · operative note",
+        // n.label, not a re-derived string here: the backend already picked
+        // the exact right phrasing for the moment (draft-time "cleared for
+        // review" vs approval-time "cleared to file", or the real block
+        // reason) — one source of truth instead of two copies drifting.
+        outcome: screening ? null : n.label,
+        node: n,
+        resourceUrl: null, // the screen itself is never a FHIR write
+        drafting: false,
       });
     }
 
@@ -200,11 +238,15 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
  *  is never hidden behind a pending proposal. */
 function attentionState(items: TimelineItem[]) {
   const unackAlerts = items.filter((i) => i.kind === "alert" && !i.outcome);
+  const blockedArmor = items.filter((i) => i.kind === "model_armor" && i.node.attrs?.status === "blocked");
   const pendingDocs = items.filter((i) => i.kind === "documentation" && !i.outcome && !i.drafting);
   const pendingProposals = items.filter((i) => i.kind === "proposal" && !i.outcome);
   const draftingDocs = items.filter((i) => i.kind === "documentation" && i.drafting);
 
   if (unackAlerts.length) return { tone: "high" as const, text: "Divergence alert · unacknowledged", count: unackAlerts.length };
+  // A blocked write is as serious as an unacknowledged alert — the whole
+  // point of a second fail-closed gate is that it not read as "all clear".
+  if (blockedArmor.length) return { tone: "high" as const, text: "Model Armor blocked a write", count: blockedArmor.length };
   if (pendingDocs.length) return { tone: "doc" as const, text: "Documentation awaiting review", count: pendingDocs.length };
   if (pendingProposals.length)
     return {
@@ -226,6 +268,17 @@ function GraphLink({ nodeId, children }: { nodeId: string; children: React.React
     <button className="aa__graph-link" onClick={() => focusNode(nodeId)} title="Show this node in the graph">
       {children}
     </button>
+  );
+}
+
+/** A prominent link at the very top of a detail body, jumping to THIS item's
+ *  own node — distinct from GraphLink's inline in-sentence use for OTHER
+ *  nodes referenced within the body (a cited root error, a proposal, etc). */
+function ShowNodeInGraph({ nodeId }: { nodeId: string }) {
+  return (
+    <div className="aa__show-in-graph">
+      <GraphLink nodeId={nodeId}>↗ Show node in graph</GraphLink>
+    </div>
   );
 }
 
@@ -334,10 +387,14 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
               // just to acknowledge it. Kept to exactly the two kinds that
               // HAVE a decision (proposal, documentation); an alert or a
               // benchmark has nothing here to say yes or no to.
+              // A Model Armor block is real and not the surgeon's to override
+              // from this row — Approve disappears, but Reject still lets
+              // them close the item out rather than leaving it stuck forever.
+              const blockedByArmor = item.kind === "documentation" && item.node.attrs?.approval_status === "blocked";
               const quickAccept =
                 item.kind === "proposal"
                   ? () => run(item.id, () => acknowledgeProposal(item.node.node_id, "acknowledged"))
-                  : item.kind === "documentation" && !item.drafting
+                  : item.kind === "documentation" && !item.drafting && !blockedByArmor
                     ? () => run(item.id, () => approveDocumentation("approved"))
                     : null;
               const quickReject =
@@ -381,32 +438,39 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                       </span>
                     </div>
 
-                    {!item.outcome && quickAccept && quickReject && (
+                    {/* Independent, not a joint condition: a Model Armor
+                        block removes Approve but must not also swallow
+                        Reject along with it. */}
+                    {!item.outcome && (quickAccept || quickReject) && (
                       <span className="aa__quick-actions">
-                        <button
-                          className="aa__quick-btn aa__quick-btn--yes"
-                          disabled={isBusy}
-                          title={item.kind === "documentation" ? "Approve" : "Acknowledge"}
-                          aria-label={item.kind === "documentation" ? "Approve" : "Acknowledge"}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            quickAccept();
-                          }}
-                        >
-                          ✓
-                        </button>
-                        <button
-                          className="aa__quick-btn aa__quick-btn--no"
-                          disabled={isBusy}
-                          title={item.kind === "documentation" ? "Reject" : "Dismiss"}
-                          aria-label={item.kind === "documentation" ? "Reject" : "Dismiss"}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            quickReject();
-                          }}
-                        >
-                          ✕
-                        </button>
+                        {quickAccept && (
+                          <button
+                            className="aa__quick-btn aa__quick-btn--yes"
+                            disabled={isBusy}
+                            title={item.kind === "documentation" ? "Approve" : "Acknowledge"}
+                            aria-label={item.kind === "documentation" ? "Approve" : "Acknowledge"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              quickAccept();
+                            }}
+                          >
+                            ✓
+                          </button>
+                        )}
+                        {quickReject && (
+                          <button
+                            className="aa__quick-btn aa__quick-btn--no"
+                            disabled={isBusy}
+                            title={item.kind === "documentation" ? "Reject" : "Dismiss"}
+                            aria-label={item.kind === "documentation" ? "Reject" : "Dismiss"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              quickReject();
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
                       </span>
                     )}
 
@@ -444,6 +508,7 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                         />
                       )}
                       {item.kind === "alert" && <AlertDetail item={item} nodeById={nodeById} nodes={nodes} edges={edges} />}
+                      {item.kind === "model_armor" && <ModelArmorDetail item={item} />}
                       {item.kind === "benchmark" && <BenchmarkDetail item={item} nodes={nodes} edges={edges} />}
                       {item.kind === "documentation" && (
                         <DocumentationDetail
@@ -554,6 +619,7 @@ function AlertDetail({
 
   return (
     <>
+      <ShowNodeInGraph nodeId={item.node.node_id} />
       <p className="aa__framing">
         {String(a.reasoning ?? "")} Detected {String(a.detection_method ?? "")}, confidence {String(a.confidence ?? "?")}.
       </p>
@@ -621,15 +687,29 @@ function DocumentationDetail({
     ["Physiological events", "physiological_events"],
   ];
 
+  const blockedByArmor = a.approval_status === "blocked";
+
   if (item.drafting) {
     // Nothing to review yet — the Gemini call that produces `sections` is
     // still in flight. Showing the (empty) section list or the approve/reject
     // buttons here would invite a click that has nothing real to act on.
-    return <p className="aa__framing">Drafting from the case's full reasoning graph — this usually takes 1-2 minutes.</p>;
+    return (
+      <>
+        <ShowNodeInGraph nodeId={item.node.node_id} />
+        <p className="aa__framing">Drafting from the case's full reasoning graph — this usually takes 1-2 minutes.</p>
+      </>
+    );
   }
 
   return (
     <>
+      <ShowNodeInGraph nodeId={item.node.node_id} />
+      {blockedByArmor && (
+        <div className="aa__verify aa__verify--block">
+          Blocked by Model Armor — {String(a.model_armor_reason ?? "flagged content")}. The draft below is shown for
+          review, but cannot be approved as written.
+        </div>
+      )}
       <p className="aa__framing">{String(sections.summary ?? "")}</p>
 
       {ordered.map(([title, key]) =>
@@ -666,9 +746,11 @@ function DocumentationDetail({
         </div>
       ) : (
         <div className="aa__actions">
-          <button className="aa__btn aa__btn--primary" disabled={busy} onClick={() => onAct("approved")}>
-            Approve &amp; write to FHIR
-          </button>
+          {!blockedByArmor && (
+            <button className="aa__btn aa__btn--primary" disabled={busy} onClick={() => onAct("approved")}>
+              Approve &amp; write to FHIR
+            </button>
+          )}
           <button className="aa__btn" disabled={busy} onClick={() => onAct("rejected")}>
             Reject
           </button>
@@ -679,6 +761,30 @@ function DocumentationDetail({
   );
 }
 
+/** The content-safety gate on the operative note's outbound FHIR write —
+ *  agents/hitl/approval.py::_file_record, tools/model_armor.py. Nothing to
+ *  decide here (fully automated, not a HITL item), so no actions — just what
+ *  it found and where it happened. */
+function ModelArmorDetail({ item }: { item: TimelineItem }) {
+  const a = item.node.attrs ?? {};
+  const status = a.status as string | undefined;
+  const matchState = a.raw_filter_match_state as string | undefined;
+
+  return (
+    <>
+      <ShowNodeInGraph nodeId={item.node.node_id} />
+      <p className="aa__framing">
+        {status === "screening"
+          ? "Screening this note's real text for injected or sensitive content before it can be filed."
+          : status === "blocked"
+            ? `Blocked: ${String(a.reason ?? "Model Armor flagged this content")}`
+            : "Cleared — no injected, malicious, or sensitive content detected."}
+      </p>
+      {matchState && <div className="aa__provenance">Model Armor verdict: {matchState}</div>}
+      {item.outcome && <div className={`aa__verify aa__verify--${status === "blocked" ? "block" : "pass"}`}>{item.outcome}</div>}
+    </>
+  );
+}
 
 function BenchmarkDetail({
   item,

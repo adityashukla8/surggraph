@@ -147,6 +147,15 @@ def verification_block(action_intent_id: str) -> str:
     return f"verification:{action_intent_id}"
 
 
+def model_armor_screen(subject_id: str) -> str:
+    """Same shape as verification_block — a second, independent fail-closed
+    gate, not a competing convention. Keyed by whatever it's screening: the
+    documentation node id at draft time (runs autonomously, before a surgeon
+    ever sees an Approve button) and again at approval time (re-screening
+    whatever was actually edited) — one node, refreshed twice, not two."""
+    return f"model_armor:{subject_id}"
+
+
 def action_outcome(action_intent_id: str) -> str:
     """Not in §12's table — mirrors verification_block's shape, keyed by the
     intent it reports on so the outcome edge can never dangle."""
@@ -194,6 +203,7 @@ _PREFIX_TO_NODE_TYPE = {
     "divergence": "divergence_alert",
     "action_intent": "action_intent",
     "verification": "verification_block",
+    "model_armor": "model_armor_screen",
     "action_outcome": "action_outcome",
     "benchmark": "benchmark",
     "documentation": "documentation",

@@ -23,6 +23,7 @@ export type NodeType =
   // Action + safety
   | "action_intent"
   | "verification_block"
+  | "model_armor_screen"
   | "action_outcome"
   // Post-case
   | "benchmark"

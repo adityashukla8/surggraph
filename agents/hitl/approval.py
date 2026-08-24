@@ -29,13 +29,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
+from opentelemetry import trace
+
 from agents.verification_gate import gate
 from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
 from tools.fhir_write import write_document_reference
+from tools.model_armor import join_note_sections, screen_operative_note
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer(__name__)
 
 SOURCE_AGENT = "human"
 _SOURCE_TOOL = "hitl_documentation_approval"
@@ -154,6 +158,23 @@ def _human_action_patches(case_id: str, doc_node_id: str, outcome: str, at: str)
 
 
 async def _file_record(case_id: str, doc_node_id: str, sections: dict) -> dict:
+    """One real, connected trace for the whole filing pipeline (gate check ->
+    Model Armor screen -> FHIR write), not three disconnected log lines — a
+    viewer in Cloud Trace sees this as a single waterfall, child spans
+    included automatically via OTel's context propagation (start_as_current_
+    span needs no manual passing between the calls this wraps)."""
+    with _tracer.start_as_current_span("hitl.file_operative_record") as span:
+        span.set_attribute("case_id", case_id)
+        span.set_attribute("source_agent", SOURCE_AGENT)
+        result = await _file_record_impl(case_id, doc_node_id, sections)
+        span.set_attribute("filed", bool(result.get("filed")))
+        span.set_attribute("detail", str(result.get("detail", ""))[:200])
+        if not result.get("filed"):
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(result.get("detail", ""))[:200]))
+        return result
+
+
+async def _file_record_impl(case_id: str, doc_node_id: str, sections: dict) -> dict:
     """Gate, then write. Same fail-closed contract as the alert path."""
     intent_id = node_ids.action_intent("documentation", uuid.uuid4().hex[:10])
 
@@ -193,26 +214,123 @@ async def _file_record(case_id: str, doc_node_id: str, sections: dict) -> dict:
         ],
     )
 
-    verdict = await gate.verify_documentation(case_id, intent_id, doc_node_id)
+    with _tracer.start_as_current_span("hitl.verify_documentation") as gate_span:
+        verdict = await gate.verify_documentation(case_id, intent_id, doc_node_id)
+        gate_span.set_attribute("passed", verdict.passed)
+        if not verdict.passed:
+            gate_span.set_status(trace.Status(trace.StatusCode.ERROR, verdict.summary))
     if not verdict.passed:
         await _write_outcome(case_id, intent_id, False, f"Blocked by verification gate — {verdict.summary}", blocked=True)
         return {"case_id": case_id, "outcome": "approved", "filed": False, "detail": verdict.summary}
 
+    # Second, independent fail-closed gate: the verification gate above
+    # checked the CLAIM is evidenced; this checks the TEXT is safe to hand
+    # to an external system. Screens the plain narrative, not the base64
+    # attachment payload write_document_reference builds below.
+    #
+    # RE-screens the SAME node agents/documentation/agent.py::draft_note
+    # already screened autonomously, before the surgeon ever saw an Approve
+    # button — keyed by doc_node_id, not intent_id, so this is one node
+    # refreshed twice, not a second one. The re-screen matters because
+    # `sections` here may include the surgeon's own edits (outcome="edited"
+    # in record_approval), which the draft-time pass never saw.
+    #
+    # Written in two real phases, not one — the call itself takes a couple
+    # of real seconds (network round trip to Model Armor), so a viewer
+    # watching the graph would otherwise see nothing land until the verdict
+    # is already known. The "screening" node is only shown because the call
+    # is genuinely in flight at that instant; it's overwritten by the same
+    # write below the moment a verdict actually exists.
+    model_armor_node_id = node_ids.model_armor_screen(doc_node_id)
     try:
-        result = write_document_reference(
+        await apply_state_patches(
             case_id,
-            title=f"SurgGraph operative record — {case_id}",
-            description=sections.get("summary", "")[:400],
-            content_json_base64=base64.b64encode(json.dumps(sections, indent=2).encode()).decode(),
-            source_agent=SOURCE_AGENT,
-            idempotency_key=f"{case_id}-operative-record",
+            [
+                (
+                    GraphNodePatch(
+                        node_id=model_armor_node_id,
+                        node_type="model_armor_screen",
+                        label="Model Armor re-screening operative note…",
+                        attrs={"status": "screening"},
+                        source_agent=SOURCE_AGENT,
+                        source_tool=_SOURCE_TOOL,
+                    ),
+                    None,
+                    "Re-screening the operative note (possibly surgeon-edited) before it's filed",
+                ),
+                (
+                    None,
+                    GraphEdgePatch(
+                        edge_id=node_ids.edge(intent_id, model_armor_node_id, "verification"),
+                        source_node_id=intent_id,
+                        target_node_id=model_armor_node_id,
+                        edge_kind="verification",
+                        source_agent=SOURCE_AGENT,
+                        source_tool=_SOURCE_TOOL,
+                        reason="Content-safety re-screening before the external write",
+                    ),
+                    "Content-safety re-screening before the external write",
+                ),
+            ],
+        )
+
+        screen = screen_operative_note(join_note_sections(sections))
+
+        await apply_state_patches(
+            case_id,
+            [
+                (
+                    GraphNodePatch(
+                        node_id=model_armor_node_id,
+                        node_type="model_armor_screen",
+                        label=(f"BLOCKED — {screen.reason}" if screen.blocked else "Passed — cleared to file"),
+                        attrs={
+                            "status": "blocked" if screen.blocked else "passed",
+                            "reason": screen.reason,
+                            "raw_filter_match_state": screen.raw_filter_match_state,
+                        },
+                        source_agent=SOURCE_AGENT,
+                        source_tool=_SOURCE_TOOL,
+                    ),
+                    None,
+                    screen.reason or "Model Armor cleared this content for filing",
+                ),
+            ],
         )
     except Exception as exc:
-        await _write_outcome(case_id, intent_id, False, f"FHIR write failed: {type(exc).__name__}: {exc}")
+        # Same fail-closed contract as the FHIR write below: a crash here
+        # must still leave a visible, non-dangling outcome on this
+        # action_intent, not an unhandled 500 and an orphaned node.
+        await _write_outcome(case_id, intent_id, False, f"Model Armor screening failed: {type(exc).__name__}: {exc}", blocked=True)
         return {"case_id": case_id, "outcome": "approved", "filed": False, "detail": str(exc)}
 
-    verified = getattr(result, "verified", False)
-    resource_id = getattr(result, "resource_id", None)
+    if screen.blocked:
+        await _write_outcome(case_id, intent_id, False, f"Blocked by Model Armor — {screen.reason}", blocked=True)
+        return {"case_id": case_id, "outcome": "approved", "filed": False, "detail": screen.reason}
+
+    with _tracer.start_as_current_span("hitl.write_document_reference") as fhir_span:
+        try:
+            result = write_document_reference(
+                case_id,
+                title=f"SurgGraph operative record — {case_id}",
+                description=sections.get("summary", "")[:400],
+                content_json_base64=base64.b64encode(json.dumps(sections, indent=2).encode()).decode(),
+                source_agent=SOURCE_AGENT,
+                idempotency_key=f"{case_id}-operative-record",
+            )
+        except Exception as exc:
+            fhir_span.record_exception(exc)
+            fhir_span.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
+            await _write_outcome(case_id, intent_id, False, f"FHIR write failed: {type(exc).__name__}: {exc}")
+            return {"case_id": case_id, "outcome": "approved", "filed": False, "detail": str(exc)}
+
+        verified = getattr(result, "verified", False)
+        resource_id = getattr(result, "resource_id", None)
+        fhir_span.set_attribute("fhir.resource_id", resource_id or "")
+        fhir_span.set_attribute("fhir.verified", verified)
+        if not verified:
+            fhir_span.set_status(trace.Status(trace.StatusCode.ERROR, "readback did not confirm"))
+
     url = f"{__import__('tools.fhir_write', fromlist=['FHIR_BASE_URL']).FHIR_BASE_URL}/DocumentReference/{resource_id}" if resource_id else None
     detail = f"filed as {url}" + ("" if verified else " (readback did not confirm)")
 
@@ -231,7 +349,10 @@ async def _write_outcome(
 ) -> None:
     node_id = node_ids.action_outcome(intent_id)
     label = (
-        "Operative record suppressed by verification gate"
+        # Which gate blocked it is in `detail`, not here — two independent
+        # gates can both land here (verification gate, Model Armor) and a
+        # label naming only one would misdescribe the other's block.
+        "Operative record suppressed before filing"
         if blocked
         else ("Operative record filed" + ("" if readback_verified else " (readback unconfirmed)"))
         if filed

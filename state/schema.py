@@ -70,6 +70,7 @@ NodeType = Literal[
     # --- Action + safety ----------------------------------------------------
     "action_intent",  # action_intent:{kind}:{ulid} — a pending external write
     "verification_block",  # verification:{action_intent_id} — fail-closed gate outcome
+    "model_armor_screen",  # model_armor:{action_intent_id} — second fail-closed gate, content safety
     "action_outcome",  # the external write's real delivery result
     # --- Post-case ----------------------------------------------------------
     "benchmark",  # benchmark:{case_id} — singleton, predicted-vs-actual scorecard

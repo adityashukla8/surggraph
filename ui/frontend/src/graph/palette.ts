@@ -47,6 +47,7 @@ const NODE_KIND_COLOR: Record<NodeType, string> = {
   // Action + safety
   action_intent: "var(--baseline)",
   verification_block: "var(--series-6)", // green
+  model_armor_screen: "var(--series-6)", // green — same family as verification_block, a second fail-closed gate
   action_outcome: "var(--baseline)",
   // Post-case
   benchmark: "var(--node-brown)",
@@ -66,6 +67,15 @@ export function nodeKindColorVar(nodeType: NodeType, attrs?: Record<string, unkn
   if (nodeType === "error") {
     const band = attrs?.severity_band;
     if (typeof band === "string" && band in SEVERITY_COLOR) return SEVERITY_COLOR[band];
+  }
+  if (nodeType === "model_armor_screen") {
+    // A blocked write is as serious as a divergence alert, and a screen
+    // still in flight is not yet a pass — reading both the same green as a
+    // real clearance would be the exact "looks fine but isn't" failure
+    // mode error's severity_band override already exists to avoid.
+    const status = attrs?.status;
+    if (status === "blocked") return SEVERITY_COLOR.high;
+    if (status === "screening") return SEVERITY_COLOR.low;
   }
   return NODE_KIND_COLOR[nodeType] ?? "var(--baseline)";
 }
@@ -190,6 +200,7 @@ export const NODE_TYPE_LABEL: Record<NodeType, string> = {
   // Action + safety
   action_intent: "Intent",
   verification_block: "Gate",
+  model_armor_screen: "Armor",
   action_outcome: "Outcome",
   // Post-case
   benchmark: "Benchmark",
@@ -217,6 +228,7 @@ export const NODE_TYPE_ICON: Record<NodeType, string> = {
   // Action + safety
   action_intent: "◇", // hollow — proposed, not yet done
   verification_block: "⛉",
+  model_armor_screen: "⛨", // shield — distinct from the gate glyph, same Misc Symbols block
   action_outcome: "✦", // the node that reached the real world
   // Post-case
   benchmark: "▦",

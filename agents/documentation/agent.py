@@ -35,6 +35,7 @@ from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
 from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, documentation as documentation_slice
+from tools.model_armor import join_note_sections, screen_operative_note
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,70 @@ async def draft_note(case_id: str) -> str | None:
         OperativeNoteDraft,
         app_name="surggraph_documentation",
     )
+    sections = draft.model_dump()
+
+    # Screened HERE, autonomously, before a surgeon ever sees an Approve
+    # button — not just at approval time. This is the same fail-closed gate
+    # agents/hitl/approval.py::_file_record_impl re-runs at approval time
+    # (re-screening whatever the surgeon actually edited, which is the one
+    # thing that can genuinely change between now and then); this pass is
+    # what gives the surgeon advance visibility instead of only finding out
+    # after clicking Approve.
+    model_armor_node_id = node_ids.model_armor_screen(node_id)
+    await apply_state_patches(
+        case_id,
+        [
+            (
+                GraphNodePatch(
+                    node_id=model_armor_node_id,
+                    node_type="model_armor_screen",
+                    label="Model Armor screening operative note…",
+                    attrs={"status": "screening"},
+                    source_agent=SOURCE_AGENT,
+                    source_tool=_SOURCE_TOOL,
+                ),
+                None,
+                "Screening the freshly drafted operative note for injected or sensitive content",
+            ),
+            (
+                None,
+                GraphEdgePatch(
+                    edge_id=node_ids.edge(node_id, model_armor_node_id, "verification"),
+                    source_node_id=node_id,
+                    target_node_id=model_armor_node_id,
+                    edge_kind="verification",
+                    source_agent=SOURCE_AGENT,
+                    source_tool=_SOURCE_TOOL,
+                    reason="Content-safety screening of the freshly drafted note",
+                ),
+                "Content-safety screening of the freshly drafted note",
+            ),
+        ],
+    )
+
+    screen = screen_operative_note(join_note_sections(sections))
+
+    await apply_state_patches(
+        case_id,
+        [
+            (
+                GraphNodePatch(
+                    node_id=model_armor_node_id,
+                    node_type="model_armor_screen",
+                    label=(f"BLOCKED — {screen.reason}" if screen.blocked else "Passed — cleared for review"),
+                    attrs={
+                        "status": "blocked" if screen.blocked else "passed",
+                        "reason": screen.reason,
+                        "raw_filter_match_state": screen.raw_filter_match_state,
+                    },
+                    source_agent=SOURCE_AGENT,
+                    source_tool=_SOURCE_TOOL,
+                ),
+                None,
+                screen.reason or "Model Armor cleared this draft for surgeon review",
+            ),
+        ],
+    )
 
     await apply_state_patches(
         case_id,
@@ -210,10 +275,20 @@ async def draft_note(case_id: str) -> str | None:
                 GraphNodePatch(
                     node_id=node_id,
                     node_type="documentation",
-                    label="Operative record draft — awaiting surgeon approval",
+                    label=(
+                        "Operative record draft — blocked by Model Armor"
+                        if screen.blocked
+                        else "Operative record draft — awaiting surgeon approval"
+                    ),
                     attrs={
-                        "approval_status": "pending",
-                        "sections": draft.model_dump(),
+                        # A blocked draft still needs surgeon eyes on WHY, so
+                        # sections are kept rather than withheld — only the
+                        # approval action itself is unavailable (see
+                        # ui/frontend's AutonomousActionsPanel, which hides
+                        # Approve for this status and offers only Reject).
+                        "approval_status": "blocked" if screen.blocked else "pending",
+                        "sections": sections,
+                        "model_armor_reason": screen.reason,
                         # Carried so nothing downstream can present the draft as
                         # more settled than it is.
                         "synthetic_patient": True,
@@ -248,5 +323,10 @@ async def draft_note(case_id: str) -> str | None:
         ],
     )
 
-    logger.info("documentation[%s]: drafted, %d limitation(s) stated", case_id, len(draft.limitations))
+    logger.info(
+        "documentation[%s]: drafted, %d limitation(s) stated, model armor %s",
+        case_id,
+        len(draft.limitations),
+        "BLOCKED" if screen.blocked else "passed",
+    )
     return node_id

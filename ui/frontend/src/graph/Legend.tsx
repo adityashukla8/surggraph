@@ -41,6 +41,7 @@ const NODE_GROUPS: { heading: string; rows: NodeRow[] }[] = [
     rows: [
       { kind: "action_intent", note: "proposed external write" },
       { kind: "verification_block", note: "fail-closed gate outcome" },
+      { kind: "model_armor_screen", note: "content-safety screening outcome" },
       { kind: "action_outcome", note: "real-world write result" },
     ],
   },

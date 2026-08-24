@@ -793,6 +793,7 @@
 .aa__tag--alert         { background: color-mix(in srgb, var(--series-8) 20%, var(--surface-1)); border-color: color-mix(in srgb, var(--series-8) 40%, transparent); color: var(--text-primary); }
 .aa__tag--documentation { background: color-mix(in srgb, var(--series-1) 18%, var(--surface-1)); border-color: color-mix(in srgb, var(--series-1) 38%, transparent); color: var(--text-primary); }
 .aa__tag--benchmark     { background: color-mix(in srgb, var(--node-brown) 20%, var(--surface-1)); border-color: color-mix(in srgb, var(--node-brown) 40%, transparent); color: var(--text-primary); }
+.aa__tag--model_armor   { background: color-mix(in srgb, var(--series-6) 20%, var(--surface-1)); border-color: color-mix(in srgb, var(--series-6) 40%, transparent); color: var(--text-primary); }
 
 /* Severity as a tag rather than a dot: a coloured circle carries no meaning
    without a legend, and a word survives a greyscale screenshot. */
@@ -838,6 +839,14 @@
   font-family: inherit; text-decoration: underline; text-underline-offset: 2px;
 }
 .aa__graph-link:hover { color: var(--text-primary); }
+
+/* The top-of-body "show this item's own node" link — set off from the
+   in-sentence GraphLink uses below it (a citation, a referenced complication)
+   so a reader sees "jump to me" as a distinct affordance from "jump to what I
+   reference". */
+.aa__show-in-graph { margin-bottom: 8px; }
+.aa__show-in-graph .aa__graph-link { font-size: 10.5px; font-weight: 600; text-decoration: none; }
+.aa__show-in-graph .aa__graph-link:hover { text-decoration: underline; }
 
 .aa__trail { color: var(--text-secondary); }
 .aa__provenance { font-size: 9.5px; color: var(--text-muted); margin-top: 5px; }
