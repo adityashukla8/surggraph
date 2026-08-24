@@ -13,7 +13,8 @@
     "@dagrejs/dagre": "^3.1.1",
     "@xyflow/react": "^12.11.3",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
