@@ -8,6 +8,17 @@ import { applyCollapse, resetCollapse, useCollapsedNodes } from "./useGraphColla
 const STATE_SERVICE_URL = import.meta.env.VITE_STATE_SERVICE_URL ?? "http://localhost:8080";
 const LAYOUT_DEBOUNCE_MS = 500;
 const RECONNECT_DELAY_MS = 5000;
+// `log` is one shared FIFO across every agent's reasoning events, but its
+// only consumer (EventInputPanel) filters down to error_detection's alone.
+// A 200-entry cap silently evicted that whole subset in a real, reproduced
+// run: a case's final phase produces a real burst of divergence/complication/
+// alert-routing entries (confirmed live — one run went 200 total events by
+// mid-case, then steadily lost 120 down to under 40 real error_detection
+// entries as later unrelated agents' activity pushed them out), which read
+// as "the feed cleared" even though nothing was actually wrong. 2000 is
+// cheap (each entry is a few small fields) and comfortably above what a
+// full real case run produces.
+const LOG_CAP = 2000;
 
 function toFlowNode(patch: GraphNodePatch): CaseFlowNode {
   return {
@@ -165,7 +176,7 @@ export function useCaseStateStream(caseId: string | null): CaseStateStreamResult
             videoTimeS: typeof event.node?.attrs?.video_time_s === "number" ? (event.node.attrs.video_time_s as number) : undefined,
           },
           ...prev,
-        ].slice(0, 200),
+        ].slice(0, LOG_CAP),
       );
     }
 

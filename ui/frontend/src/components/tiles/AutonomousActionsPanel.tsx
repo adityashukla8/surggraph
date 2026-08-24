@@ -152,7 +152,13 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
 
     if (n.node_type === "documentation") {
       const status = a.approval_status as string | undefined;
-      const drafting = status === "drafting";
+      const closingOut = status === "closing_out";
+      // Same non-actionable shape as drafting (no sections yet, nothing to
+      // decide) — closing_out is a real, distinct phase (draining in-flight
+      // divergence monitoring before drafting even starts) but behaves
+      // identically here, so it folds into the same flag rather than a
+      // parallel one every downstream check would need to remember too.
+      const drafting = status === "drafting" || closingOut;
       const blockedByArmor = status === "blocked";
       items.push({
         id: n.node_id,
@@ -162,11 +168,13 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         // screening BEFORE a surgeon can approve is that it not read as a
         // routine "ready for review" row.
         severity: blockedByArmor ? "high" : "low",
-        summary: drafting
-          ? "Preparing operative report…"
-          : blockedByArmor
-            ? "Operative note blocked by Model Armor"
-            : "Operative note ready for review",
+        summary: closingOut
+          ? "Wrapping up the case before drafting…"
+          : drafting
+            ? "Preparing operative report…"
+            : blockedByArmor
+              ? "Operative note blocked by Model Armor"
+              : "Operative note ready for review",
         // "blocked" behaves like "pending" here, not like a resolved
         // outcome: Approve is gone, but Reject still is, and a resolved-
         // looking row with no way to act on it would strand the item. The
@@ -254,11 +262,16 @@ function attentionState(items: TimelineItem[]) {
       text: `${pendingProposals.length} proposal${pendingProposals.length > 1 ? "s" : ""} pending acknowledgment`,
       count: pendingProposals.length,
     };
-  // Genuinely in progress (the drafting node is a real status write, see
-  // agents/documentation/agent.py), not a fake "still working" spinner — the
-  // ~1-2 minute drafting step otherwise leaves the banner reading "all clear"
-  // while the system is actually still busy closing out the case.
-  if (draftingDocs.length) return { tone: "doc" as const, text: "Preparing operative report…", count: 0 };
+  // Genuinely in progress (both the closing_out and drafting statuses are
+  // real status writes, see agents/orchestrator/agent.py and agents/
+  // documentation/agent.py), not a fake "still working" spinner — the whole
+  // ~1-2 minute close-out otherwise leaves the banner reading "all clear"
+  // while the system is actually still busy, which is exactly what made it
+  // look like nothing was happening after the last divergence alert.
+  if (draftingDocs.length) {
+    const closingOut = draftingDocs.some((i) => i.node.attrs?.approval_status === "closing_out");
+    return { tone: "doc" as const, text: closingOut ? "Wrapping up the case…" : "Preparing operative report…", count: 0 };
+  }
   return { tone: "neutral" as const, text: "System monitoring · all clear", count: 0 };
 }
 
@@ -691,12 +704,19 @@ function DocumentationDetail({
 
   if (item.drafting) {
     // Nothing to review yet — the Gemini call that produces `sections` is
-    // still in flight. Showing the (empty) section list or the approve/reject
-    // buttons here would invite a click that has nothing real to act on.
+    // still in flight (or hasn't started: closing_out is the earlier phase
+    // draining in-flight divergence monitoring first). Showing the (empty)
+    // section list or the approve/reject buttons here would invite a click
+    // that has nothing real to act on.
+    const closingOut = a.approval_status === "closing_out";
     return (
       <>
         <ShowNodeInGraph nodeId={item.node.node_id} />
-        <p className="aa__framing">Drafting from the case's full reasoning graph — this usually takes 1-2 minutes.</p>
+        <p className="aa__framing">
+          {closingOut
+            ? "Letting in-flight divergence monitoring finish before drafting starts — this usually takes under a minute."
+            : "Drafting from the case's full reasoning graph — this usually takes 1-2 minutes."}
+        </p>
       </>
     );
   }

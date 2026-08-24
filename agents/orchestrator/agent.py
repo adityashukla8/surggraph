@@ -402,6 +402,29 @@ async def open_case(
         # window, or the last proposal made in a case gets cancelled before
         # it can ever report — which would silently lose exactly the
         # divergences that matter most, the late ones.
+        #
+        # A REAL status write, not a fake progress bar: this wait is genuine
+        # (up to MAX_POLLS*POLL_INTERVAL_S+30 real seconds) and, until this
+        # write existed, produced zero visible activity anywhere in the UI —
+        # the last thing on screen was the final divergence alert, then
+        # silence, then "Preparing operative report…" appeared out of
+        # nowhere a minute-plus later. Landing on the documentation node's
+        # own id so draft_note()'s first write naturally supersedes it the
+        # moment drafting actually starts.
+        await apply_state_patch(
+            case_id,
+            GraphNodePatch(
+                node_id=node_ids.documentation(case_id),
+                node_type="documentation",
+                label="Wrapping up in-flight reasoning before drafting the operative report…",
+                attrs={"approval_status": "closing_out"},
+                source_agent="orchestrator",
+                source_tool="open_case",
+            ),
+            None,
+            "Waiting for in-flight divergence monitoring to finish before closing out the case",
+        )
+
         await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
 
         # Post-case: the case grades itself and documents itself concurrently.
