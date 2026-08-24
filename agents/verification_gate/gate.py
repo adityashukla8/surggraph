@@ -223,16 +223,12 @@ def evaluate_documentation(index: GraphIndex, documentation_node_id: str) -> Gat
     ):
         return result
 
-    # A reader has to be able to weight the content. A note reporting automated
-    # detections with no indication of how that detector actually scored is
-    # asking to be over-trusted.
-    if not _check(
-        result, "case_is_benchmarked", index.nodes_by_id.get(node_ids.benchmark(doc.attrs.get("case_id", ""))) is not None
-        or bool(index.of_type("benchmark")),
-        "no benchmark for this case, so the note reports detections a reader cannot weight",
-    ):
-        return result
-
+    # A "case_is_benchmarked" check used to sit here — self-benchmarking
+    # (agents/benchmark/agent.py) is disabled as a functional step (kept,
+    # not deleted, in case it's wanted again later), so this graph would
+    # never carry a benchmark node again and the check would fail-closed on
+    # every single case, permanently. Removed rather than left to block
+    # everything; re-add alongside benchmark_case if it's re-enabled.
     if not _check(
         result, "limitations_stated", bool(sections.get("limitations")),
         "the draft states no limitations, so a reader cannot tell what it does not cover",

@@ -48,7 +48,6 @@ from agents.error_detection.agent import SUB_AGENT_LABELS, error_detection_case
 from agents.complication_reasoning import agent as complication_reasoning
 from agents.corrective_replanning import agent as corrective_replanning
 from agents.alert_routing import agent as alert_routing
-from agents.benchmark.agent import benchmark_case
 from agents.divergence_detection import agent as divergence_detection
 from agents.documentation.agent import draft_note
 from agents.error_detection.coordinator import ErrorDetectionCoordinatorAgent
@@ -59,7 +58,7 @@ from state.schema import DivergenceEvent, GraphEdgePatch, GraphNodePatch
 from tools.adk_runner import run_llm_agent_once
 from tools.gemini_model import new_agent_model
 from tools.patient_twin import load_patient_twin, patient_twin_attrs
-from tools.state_tools import apply_state_patch, apply_state_patches
+from tools.state_tools import apply_state_patches
 from tools.video_utils import SWEEP_END_S, SWEEP_START_S, find_video_duration_s, format_video_time_range
 
 # Real, fixed pipeline structure (not decorative) — Orchestrator dispatches
@@ -411,43 +410,61 @@ async def open_case(
         # nowhere a minute-plus later. Landing on the documentation node's
         # own id so draft_note()'s first write naturally supersedes it the
         # moment drafting actually starts.
-        await apply_state_patch(
+        documentation_node_id = node_ids.documentation(case_id)
+        trigger_node_id = node_ids.trigger(case_id)
+        await apply_state_patches(
             case_id,
-            GraphNodePatch(
-                node_id=node_ids.documentation(case_id),
-                node_type="documentation",
-                label="Wrapping up in-flight reasoning before drafting the operative report…",
-                attrs={"approval_status": "closing_out"},
-                source_agent="orchestrator",
-                source_tool="open_case",
-            ),
-            None,
-            "Waiting for in-flight divergence monitoring to finish before closing out the case",
+            [
+                (
+                    GraphNodePatch(
+                        node_id=documentation_node_id,
+                        node_type="documentation",
+                        label="Wrapping up in-flight reasoning before drafting the operative report…",
+                        attrs={"approval_status": "closing_out"},
+                        source_agent="orchestrator",
+                        source_tool="open_case",
+                    ),
+                    None,
+                    "Waiting for in-flight divergence monitoring to finish before closing out the case",
+                ),
+                # Otherwise orphaned: nothing else ever draws an edge INTO the
+                # operative record, so without this it sits disconnected from
+                # the case's own skeleton (the trigger node everything else
+                # hangs off) for its entire lifetime, drafting through filed.
+                (
+                    None,
+                    GraphEdgePatch(
+                        edge_id=node_ids.edge(trigger_node_id, documentation_node_id, "hierarchy"),
+                        source_node_id=trigger_node_id,
+                        target_node_id=documentation_node_id,
+                        edge_kind="hierarchy",
+                        source_agent="orchestrator",
+                        source_tool="open_case",
+                        reason="The operative record is part of this triggered case",
+                    ),
+                    "The operative record is part of this triggered case",
+                ),
+            ],
         )
 
         await bus.drain(timeout_s=divergence_detection.MAX_POLLS * divergence_detection.POLL_INTERVAL_S + 30)
 
-        # Post-case: the case grades itself and documents itself concurrently.
-        # These used to run in sequence (benchmark then documentation) so the
-        # note could report the benchmark score as a trust signal; that
-        # coupling was removed (system_performance dropped from the note, see
-        # agents/documentation/subagent.py) specifically so this could be
-        # parallel — documentation no longer reads anything benchmark_case
-        # writes. Each failure is caught independently so one failing never
-        # blocks or is masked by the other.
-        async def _run_benchmark() -> None:
-            try:
-                await benchmark_case(case_id, video_id, start_s, end_s)
-            except Exception:
-                logger.exception("case %s: benchmarking failed — the case still closes", case_id)
-
+        # Post-case: the case documents itself. Self-benchmarking
+        # (agents/benchmark/agent.py::benchmark_case) is intentionally not
+        # called here — disabled as a functional step, not deleted, in case
+        # it's wanted again later. It used to run here concurrently with
+        # documentation (decoupled from it: system_performance was dropped
+        # from the note specifically so documentation never depended on
+        # anything benchmark_case writes, see agents/documentation/
+        # subagent.py) — that decoupling is exactly why removing it here is
+        # a clean subtraction rather than a rewire.
         async def _run_documentation() -> None:
             try:
                 await draft_note(case_id)
             except Exception:
                 logger.exception("case %s: drafting failed — the case still closes", case_id)
 
-        await asyncio.gather(_run_benchmark(), _run_documentation())
+        await _run_documentation()
     finally:
         await event_bus.close_bus(case_id)
 

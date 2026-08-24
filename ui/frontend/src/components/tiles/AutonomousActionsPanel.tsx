@@ -220,23 +220,28 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
       });
     }
 
-    if (n.node_type === "benchmark") {
-      const f1 = Number(a.macro_f1 ?? 0);
-      const vs = Number(a.vs_cares ?? 0);
-      items.push({
-        id: n.node_id,
-        kind: "benchmark",
-        at: n.timestamp,
-        // Informational: this is a result to read, not something needing a
-        // decision. Its importance is in the number, not in an urgency level.
-        severity: "low",
-        summary: `Case self-graded · macro-F1 ${f1.toFixed(3)} (${vs >= 0 ? "+" : ""}${vs.toFixed(3)} vs CARES)`,
-        outcome: null,
-        node: n,
-        resourceUrl: null, // a benchmark is never written to FHIR
-        drafting: false,
-      });
-    }
+    // Self-benchmarking is disabled as a functional step (agents/orchestrator/
+    // agent.py no longer calls benchmark_case), so no "benchmark" node will
+    // ever land here — this block is intentionally unreachable rather than
+    // deleted, along with KIND_LABEL/KIND_ICON's "benchmark" entries and
+    // BenchmarkDetail below, in case it's wanted again later.
+    // if (n.node_type === "benchmark") {
+    //   const f1 = Number(a.macro_f1 ?? 0);
+    //   const vs = Number(a.vs_cares ?? 0);
+    //   items.push({
+    //     id: n.node_id,
+    //     kind: "benchmark",
+    //     at: n.timestamp,
+    //     // Informational: this is a result to read, not something needing a
+    //     // decision. Its importance is in the number, not in an urgency level.
+    //     severity: "low",
+    //     summary: `Case self-graded · macro-F1 ${f1.toFixed(3)} (${vs >= 0 ? "+" : ""}${vs.toFixed(3)} vs CARES)`,
+    //     outcome: null,
+    //     node: n,
+    //     resourceUrl: null, // a benchmark is never written to FHIR
+    //     drafting: false,
+    //   });
+    // }
   }
 
   return items.sort((x, y) => y.at.localeCompare(x.at));
