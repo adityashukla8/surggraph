@@ -29,6 +29,11 @@ data/runtime/*
 *.key.json
 service-account*.json
 
+# Deploy-resource caches — machine-local pointers to already-deployed cloud
+# resources (Agent Runtime reasoning engine names), not source
+.deployed_root_agent.json
+.deployed_subagents.json
+
 # OS / editor
 .DS_Store
 .vscode/

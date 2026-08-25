@@ -1,0 +1,11 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg=VITE_STATE_SERVICE_URL=${_STATE_URL}'
+      - '--build-arg=VITE_ORCHESTRATOR_URL=${_ORCH_URL}'
+      - '-t'
+      - '${_IMAGE}'
+      - '.'
+images:
+  - '${_IMAGE}'

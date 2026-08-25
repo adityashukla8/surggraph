@@ -1,0 +1,741 @@
+/* SurgBot — new .sb__* classes only. Matches the existing dashboard's dark
+ * theme tokens (src/index.css's --surface-1, --page, --text-primary,
+ * --text-secondary, --text-muted, --border, --series-N custom properties)
+ * rather than inventing new colors. Visual spacing/sizing is loosely modeled
+ * on App.css's .aa__doc-section/.aa__btn (read-only reference). Entirely
+ * additive: nothing here selects or overrides .dashboard__grid or any
+ * existing tile class.
+ *
+ * Docked as a right-hand column (App.tsx's resizable/collapsible split) —
+ * earlier revision was a fixed bottom-right floating blob + popup panel,
+ * superseded once the dashboard made room for a dedicated rail. */
+
+.sb__rail {
+  height: 100vh;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+.sb__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+@keyframes sb-fade {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* --- Collapsed reopen strip ------------------------------------------- */
+
+.sb__collapsed-strip {
+  height: 100vh;
+  width: 100%;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 0;
+}
+.sb__collapsed-strip:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--series-1) 8%, var(--surface-1));
+}
+.sb__collapsed-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.sb__collapsed-dot--connected-idle,
+.sb__collapsed-dot--listening { background: var(--status-good); }
+.sb__collapsed-dot--speaking { background: var(--series-5); animation: sb-fade 0.8s ease-in-out infinite; }
+.sb__collapsed-dot--connecting { background: var(--status-warning); animation: sb-fade 1s ease-in-out infinite; }
+.sb__collapsed-dot--error { background: var(--status-critical); }
+.sb__collapsed-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.sb__collapsed-chevron {
+  font-size: 16px;
+}
+
+/* --- Intro (default) state --------------------------------------------- */
+
+.sb__intro {
+  flex: 1 1 auto;
+  padding: 18px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sb__intro-heading {
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sb__card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 11px;
+  background: var(--page);
+}
+.sb__card-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 7px;
+}
+.sb__card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sb__card-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sb__card-item-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sb__card-item-meta {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.sb__card-examples {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sb__card-examples li {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* --- Active chat state (was .sb__panel's inner content) ---------------- */
+
+.sb__chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Persistent, non-dismissible disclosure — no close affordance by design. */
+.sb__banner {
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--series-4) 18%, var(--surface-1));
+  border-bottom: 1px solid var(--border);
+}
+
+.sb__status-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.sb__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.sb__status-dot--connected { background: var(--status-good); }
+.sb__status-dot--connecting { background: var(--status-warning); }
+.sb__status-dot--disconnected { background: var(--status-critical); }
+
+.sb__end-session-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.sb__end-session-btn:hover {
+  border-color: var(--status-critical);
+  color: var(--status-critical);
+}
+
+/* Vertical stepper — a horizontal row of 6 squeezed labels was illegible
+ * once this became a permanent narrow rail rather than a 400px popup; one
+ * row per phase reads clearly at any rail width. */
+.sb__stepper {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 12px;
+  margin: 0;
+  list-style: none;
+  border-bottom: 1px solid var(--border);
+}
+.sb__step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.sb__step-num {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sb__step-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  text-align: left;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb__step--past .sb__step-num {
+  border-color: var(--series-3);
+  color: var(--series-3);
+}
+.sb__step--current {
+  color: var(--text-primary);
+}
+.sb__step--current .sb__step-num {
+  background: var(--series-1);
+  border-color: var(--series-1);
+  color: #fff;
+}
+
+.sb__feed {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sb__feed-empty {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+  margin-top: 16px;
+}
+
+.sb__turn {
+  max-width: 88%;
+  padding: 6px 10px;
+  border-radius: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sb__turn--user {
+  align-self: flex-end;
+  background: var(--series-1);
+  color: #fff;
+  border-bottom-right-radius: 3px;
+}
+.sb__turn--model {
+  align-self: flex-start;
+  background: var(--page);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-bottom-left-radius: 3px;
+}
+.sb__turn-cursor {
+  display: inline-block;
+  margin-left: 2px;
+  opacity: 0.6;
+  animation: sb-fade 0.9s ease-in-out infinite;
+}
+
+/* Tool/agent-use disclosure chip — every row MUST show both the agent name
+ * and the model/API surface (never one without the other); a missing field
+ * from the backend renders as the literal word "unknown" rather than being
+ * silently dropped. */
+.sb__tool-chip {
+  align-self: center;
+  max-width: 96%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--series-7) 10%, var(--surface-1));
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.sb__tool-chip--in_progress {
+  border-style: solid;
+  border-color: var(--series-4);
+}
+.sb__tool-chip-agent {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sb__tool-chip-sep {
+  color: var(--text-muted);
+}
+.sb__tool-chip-model {
+  font-family: var(--font-mono);
+  color: var(--series-7);
+}
+.sb__tool-chip-tool {
+  color: var(--text-muted);
+}
+.sb__tool-chip-tool::before {
+  content: "· ";
+}
+.sb__tool-chip-state {
+  color: var(--status-warning);
+  font-style: italic;
+}
+.sb__tool-chip-summary {
+  width: 100%;
+  color: var(--text-secondary);
+}
+
+/* Real user report: a crash mid-conversation used to wipe everything on
+ * reconnect. Now the transcript above is left exactly as it was, and this
+ * prompt is the only thing asking for a real click before continuing. */
+.sb__reconnect-prompt {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--status-critical);
+  background: color-mix(in srgb, var(--status-critical) 10%, var(--surface-1));
+}
+.sb__reconnect-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.sb__fallback {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 6px 12px;
+}
+.sb__fallback-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-decoration: underline;
+}
+.sb__fallback-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.sb__fallback-input {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.sb__btn {
+  padding: 4px 9px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.sb__btn:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+.sb__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sb__btn--primary {
+  background: var(--series-1);
+  border-color: var(--series-1);
+  color: #fff;
+  font-weight: 600;
+}
+.sb__btn--primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+  color: #fff;
+}
+.sb__btn--danger {
+  border-color: var(--status-critical);
+  color: var(--status-critical);
+}
+.sb__btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-critical) 12%, var(--page));
+}
+
+/* Phase 5 review document */
+.sb__review {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.sb__review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sb__review-header h4 {
+  font-size: 14px;
+}
+.sb__review-status {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.sb__review-status--approved,
+.sb__review-status--edited {
+  color: var(--status-good);
+  border-color: var(--status-good);
+}
+.sb__review-status--rejected,
+.sb__review-status--blocked {
+  color: var(--status-critical);
+  border-color: var(--status-critical);
+}
+.sb__review-status--pending,
+.sb__review-status--drafting {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+.sb__review-empty {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.sb__review-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sb__review-section-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.sb__review-text {
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+.sb__review-textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.sb__review-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.sb__review-resolved {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.sb__review-error {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--status-critical);
+}
+
+/* --- The living voice orb ----------------------------------------------
+ * Technique adapted from a real reference implementation (SmoothUI's
+ * SiriOrb — github.com/educlopez/smoothui, packages/smoothui/components/
+ * siri-orb/index.tsx): several conic-gradients, each centered at a
+ * different point and rotating at a different multiple/direction of one
+ * shared angle, layered and blurred so they read as drifting organic blobs
+ * of color rather than a flat pie-chart gradient. A glossy sheen (drifting
+ * radial highlight) and an inset "rim" (lit top edge, shaded bottom) sell
+ * the sphere illusion; an outer blurred glow reacts to state. Everything is
+ * driven by CSS classes only (sb__orb--${orbState}, computed from real
+ * connection/listening/speaking signals in SurgBotPanel.tsx) — no canvas,
+ * no per-frame JS, no fabricated "activity" the orb doesn't actually have. */
+
+@property --sb-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.sb__orb-dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 14px 24px;
+  border-top: 1px solid var(--border);
+  --sb-orb-size: 108px;
+}
+.sb__orb-dock--compact {
+  padding: 10px 14px 14px;
+  --sb-orb-size: 56px;
+}
+
+.sb__orb-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  display: block;
+  border-radius: 50%;
+  /* Press-and-hold-to-talk (real user report): without this, touch devices
+     treat a held-down pointer as a scroll/zoom gesture and can fire
+     pointercancel before the user actually releases. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sb__orb-btn:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 6px;
+}
+
+.sb__orb {
+  position: relative;
+  display: block;
+  width: var(--sb-orb-size);
+  height: var(--sb-orb-size);
+  transition: transform 0.2s ease;
+}
+.sb__orb-btn:hover .sb__orb {
+  transform: scale(1.04);
+}
+
+.sb__orb-glow {
+  position: absolute;
+  inset: -24%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--series-1) 0%, transparent 65%);
+  filter: blur(calc(var(--sb-orb-size) * 0.2));
+  opacity: 0.32;
+  transition: opacity 0.4s ease, background 0.4s ease;
+  pointer-events: none;
+}
+
+.sb__orb-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    conic-gradient(from calc(var(--sb-angle) * 2) at 26% 70%, var(--series-7), transparent 25% 75%, var(--series-7)),
+    conic-gradient(from calc(var(--sb-angle) * -1.6) at 74% 76%, var(--series-1), transparent 30% 70%, var(--series-1)),
+    conic-gradient(from calc(var(--sb-angle) * 1.3) at 80% 22%, var(--series-5), transparent 30% 70%, var(--series-5)),
+    conic-gradient(from calc(var(--sb-angle) * -2) at 20% 18%, var(--series-3), transparent 30% 70%, var(--series-3)),
+    #0b0b14;
+  filter: blur(calc(var(--sb-orb-size) * 0.09)) saturate(1.5) contrast(1.15);
+  animation: sb-orb-rotate 14s linear infinite;
+}
+
+.sb__orb-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.5), transparent 34%),
+    radial-gradient(circle at 72% 78%, rgba(255, 255, 255, 0.12), transparent 48%);
+  mix-blend-mode: screen;
+  animation: sb-orb-drift 9s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.sb__orb-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    inset 0 6px 12px rgba(255, 255, 255, 0.2),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.sb__orb-caption {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+@keyframes sb-orb-rotate {
+  to { --sb-angle: 360deg; }
+}
+@keyframes sb-orb-drift {
+  0% { transform: translate(-5%, -4%) scale(1.05); }
+  100% { transform: translate(6%, 5%) scale(1.12); }
+}
+
+/* idle: slow, shallow "breathing" — never draws attention on its own */
+.sb__orb--idle {
+  animation: sb-orb-breathe 5.5s ease-in-out infinite;
+}
+@keyframes sb-orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
+}
+
+.sb__orb--connecting .sb__orb-core {
+  animation-duration: 4s;
+}
+.sb__orb--connecting .sb__orb-glow {
+  opacity: 0.5;
+  animation: sb-orb-pulse-opacity 1s ease-in-out infinite;
+}
+@keyframes sb-orb-pulse-opacity {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+.sb__orb--listening {
+  animation: sb-orb-listen-pulse 1.6s ease-in-out infinite;
+}
+.sb__orb--listening .sb__orb-core {
+  animation-duration: 6s;
+}
+.sb__orb--listening .sb__orb-glow {
+  opacity: 0.55;
+  background: radial-gradient(circle, var(--series-3) 0%, transparent 65%);
+}
+@keyframes sb-orb-listen-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.sb__orb--speaking {
+  animation: sb-orb-speak-pulse 0.85s ease-in-out infinite;
+}
+.sb__orb--speaking .sb__orb-core {
+  animation-duration: 2.4s;
+  filter: blur(calc(var(--sb-orb-size) * 0.09)) saturate(1.8) contrast(1.2);
+}
+.sb__orb--speaking .sb__orb-glow {
+  opacity: 0.7;
+  background: radial-gradient(circle, var(--series-5) 0%, transparent 65%);
+  animation: sb-orb-pulse-opacity 0.7s ease-in-out infinite;
+}
+@keyframes sb-orb-speak-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.09); }
+}
+
+.sb__orb--connected-idle .sb__orb-core {
+  animation-duration: 16s;
+}
+
+.sb__orb--error .sb__orb-core {
+  filter: blur(calc(var(--sb-orb-size) * 0.09)) saturate(0.3) contrast(1.1) grayscale(0.5);
+  animation-play-state: paused;
+}
+.sb__orb--error .sb__orb-glow {
+  background: radial-gradient(circle, var(--status-critical) 0%, transparent 65%);
+  opacity: 0.5;
+}
+.sb__orb--error {
+  animation: sb-orb-shake 0.18s ease-in-out;
+}
+@keyframes sb-orb-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb__orb,
+  .sb__orb-core,
+  .sb__orb-sheen {
+    animation: none !important;
+  }
+}
