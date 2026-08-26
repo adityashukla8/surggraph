@@ -131,7 +131,16 @@ function App() {
         ) : (
           <>
             <header className="dashboard__header">
-              <h1>SurgGraph</h1>
+              <div className="dashboard__title-block">
+                <div className="dashboard__title-row">
+                  <h1>SurgGraph</h1>
+                  <span className="dashboard__track-label">TaskMaster Track</span>
+                </div>
+                <p className="dashboard__tagline">
+                  Autonomous Workflow to Detect errors, predict complications, corrective measures & divergences, &
+                  write operative reports
+                </p>
+              </div>
               <span className={`dashboard__status dashboard__status--${status}`}>
                 {status === "idle" ? "Play the video to begin" : `state service: ${status}`}
               </span>

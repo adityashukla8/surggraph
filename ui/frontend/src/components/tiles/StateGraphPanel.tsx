@@ -110,7 +110,12 @@ function GraphCanvas({ nodes, edges, status, error, isFullscreen, onToggleFullsc
       </div>
       <div className="tile__body tile__body--graph">
         {status === "idle" ? (
-          <p className="tile__placeholder">No case open yet — press play on the video to start the autonomous workflow.</p>
+          <div className="tile__placeholder-center">
+            <p className="tile__placeholder">
+              Play the video to kickoff autonomous workflow. After case ends move to SurgBot to review this and
+              other cases.
+            </p>
+          </div>
         ) : status === "disconnected" && nodes.length === 0 ? (
           <div className="tile__error">
             <p>State service unreachable.</p>

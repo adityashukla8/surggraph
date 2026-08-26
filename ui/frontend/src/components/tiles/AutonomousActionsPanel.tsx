@@ -38,7 +38,7 @@ interface Props {
 }
 
 type Severity = "low" | "medium" | "high";
-type ItemKind = "proposal" | "alert" | "documentation" | "benchmark" | "model_armor";
+type ItemKind = "proposal" | "alert" | "documentation" | "benchmark" | "model_armor" | "fhir_write";
 
 /** The category label shown as a pastel tag. Colours follow the graph's own
  *  node-kind palette so an item here and its node there read as the same
@@ -51,6 +51,7 @@ const KIND_LABEL: Record<ItemKind, string> = {
   documentation: "Operative Note",
   benchmark: "Self-Benchmark",
   model_armor: "Model Armor",
+  fhir_write: "FHIR Write",
 };
 
 interface TimelineItem {
@@ -84,7 +85,14 @@ function findResourceUrl(nodes: GraphNodePatch[], intentMatch: (n: GraphNodePatc
   return typeof url === "string" ? url : null;
 }
 
-const KIND_ICON: Record<ItemKind, string> = { proposal: "⇢", alert: "⚠", documentation: "▤", benchmark: "▦", model_armor: "⛨" };
+const KIND_ICON: Record<ItemKind, string> = {
+  proposal: "⇢",
+  alert: "⚠",
+  documentation: "▤",
+  benchmark: "▦",
+  model_armor: "⛨",
+  fhir_write: "▤",
+};
 
 function timeOf(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -145,9 +153,40 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         summary: `Divergence alert · ${a.reasoning ?? n.label}`,
         outcome: a.advisory ? "Advisory — proposal was acknowledged, no external alert" : null,
         node: n,
-        resourceUrl: findResourceUrl(nodes, (x) => x.attrs?.alert_node_id === n.node_id),
+        // The real FHIR write now gets its own dedicated timeline item (see
+        // the action_outcome branch below) instead of being a link buried
+        // inside this row — writing to FHIR is a distinct autonomous action,
+        // not a footnote on the alert that triggered it.
+        resourceUrl: null,
         drafting: false,
       });
+    }
+
+    // The actual external write an alert produced — real, dedicated item per
+    // agents/alert_routing's own AlertDelivery record (tools/fhir_alert.py:
+    // "DELIVERY FAILURE IS AN OUTCOME, NOT AN EXCEPTION" — a failed delivery
+    // is still a real, visible action_outcome node, not silently absorbed
+    // into the alert it came from). Documentation's own action_outcome
+    // (the operative note's FHIR write) is intentionally NOT duplicated here
+    // — that one stays exactly where it already was, folded into the
+    // documentation item via findResourceUrl below.
+    if (n.node_type === "action_outcome") {
+      const intent = nodes.find((x) => x.node_type === "action_intent" && n.node_id.endsWith(x.node_id));
+      if (intent?.attrs?.alert_node_id) {
+        const url = a.resource_url;
+        const delivered = typeof url === "string" && url.length > 0;
+        items.push({
+          id: n.node_id,
+          kind: "fhir_write",
+          at: n.timestamp,
+          severity: delivered ? "low" : "high",
+          summary: `Wrote to FHIR · ${n.label}`,
+          outcome: delivered ? "Filed" : "Delivery failed",
+          node: n,
+          resourceUrl: delivered ? (url as string) : null,
+          drafting: false,
+        });
+      }
     }
 
     if (n.node_type === "documentation") {
@@ -252,6 +291,7 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
 function attentionState(items: TimelineItem[]) {
   const unackAlerts = items.filter((i) => i.kind === "alert" && !i.outcome);
   const blockedArmor = items.filter((i) => i.kind === "model_armor" && i.node.attrs?.status === "blocked");
+  const failedFhirWrites = items.filter((i) => i.kind === "fhir_write" && i.severity === "high");
   const pendingDocs = items.filter((i) => i.kind === "documentation" && !i.outcome && !i.drafting);
   const pendingProposals = items.filter((i) => i.kind === "proposal" && !i.outcome);
   const draftingDocs = items.filter((i) => i.kind === "documentation" && i.drafting);
@@ -260,6 +300,10 @@ function attentionState(items: TimelineItem[]) {
   // A blocked write is as serious as an unacknowledged alert — the whole
   // point of a second fail-closed gate is that it not read as "all clear".
   if (blockedArmor.length) return { tone: "high" as const, text: "Model Armor blocked a write", count: blockedArmor.length };
+  // A failed real-world delivery must never quietly blend into "all clear" —
+  // tools/fhir_alert.py's own principle: "delivery failure is an outcome,
+  // not an exception."
+  if (failedFhirWrites.length) return { tone: "high" as const, text: "FHIR write failed", count: failedFhirWrites.length };
   if (pendingDocs.length) return { tone: "doc" as const, text: "Documentation awaiting review", count: pendingDocs.length };
   if (pendingProposals.length)
     return {
@@ -329,7 +373,7 @@ function Citations({
               <>
                 {" · "}
                 <a href={String(c.attrs.url)} target="_blank" rel="noreferrer">
-                  source ↗
+                  source ▤
                 </a>
               </>
             ) : null}
@@ -506,7 +550,7 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                           aria-label="Open the real FHIR record"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          ↗
+                          ▤
                         </a>
                       </span>
                     )}
@@ -526,6 +570,7 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                         />
                       )}
                       {item.kind === "alert" && <AlertDetail item={item} nodeById={nodeById} nodes={nodes} edges={edges} />}
+                      {item.kind === "fhir_write" && <FhirWriteDetail item={item} nodes={nodes} />}
                       {item.kind === "model_armor" && <ModelArmorDetail item={item} />}
                       {item.kind === "benchmark" && <BenchmarkDetail item={item} nodes={nodes} edges={edges} />}
                       {item.kind === "documentation" && (
@@ -630,10 +675,9 @@ function AlertDetail({
   const complication = nodeById.get(String(proposal?.attrs?.complication_id ?? ""));
   const rootError = nodeById.get(String(proposal?.attrs?.root_error_id ?? ""));
 
-  // The gate outcome and the delivery result for this alert.
+  // The gate outcome for this alert. The delivery result itself is now its
+  // own dedicated timeline item (kind "fhir_write") rather than shown here.
   const block = nodes.find((n) => n.node_type === "verification_block" && n.attrs?.subject_node_id === item.node.node_id);
-  const intent = nodes.find((n) => n.node_type === "action_intent" && n.attrs?.alert_node_id === item.node.node_id);
-  const outcome = nodes.find((n) => n.node_type === "action_outcome" && intent && n.node_id.endsWith(intent.node_id));
 
   return (
     <>
@@ -661,20 +705,6 @@ function AlertDetail({
           {block.attrs?.passed
             ? `Verification Gate: PASSED at ${timeOf(block.timestamp)}`
             : `Verification Gate: BLOCKED — ${String((block.attrs?.block_reasons as string[] | undefined)?.[0] ?? "")}`}
-        </div>
-      )}
-
-      {outcome && (
-        <div className="aa__autonomous">
-          {outcome.label}
-          {outcome.attrs?.resource_url ? (
-            <>
-              {" · "}
-              <a href={String(outcome.attrs.resource_url)} target="_blank" rel="noreferrer">
-                open record ↗
-              </a>
-            </>
-          ) : null}
         </div>
       )}
 
@@ -764,7 +794,7 @@ function DocumentationDetail({
             <>
               {" · "}
               <a href={item.resourceUrl} target="_blank" rel="noreferrer">
-                open record ↗
+                open record ▤
               </a>
             </>
           ) : null}
@@ -807,6 +837,35 @@ function ModelArmorDetail({ item }: { item: TimelineItem }) {
       </p>
       {matchState && <div className="aa__provenance">Model Armor verdict: {matchState}</div>}
       {item.outcome && <div className={`aa__verify aa__verify--${status === "blocked" ? "block" : "pass"}`}>{item.outcome}</div>}
+    </>
+  );
+}
+
+/** The real external write itself — a distinct autonomous action from the
+ *  alert that triggered it (tools/fhir_alert.py), so it gets its own
+ *  dedicated item rather than a link folded into that alert's row. */
+function FhirWriteDetail({ item, nodes }: { item: TimelineItem; nodes: GraphNodePatch[] }) {
+  const intent = nodes.find((n) => n.node_type === "action_intent" && item.node.node_id.endsWith(n.node_id));
+  const alert = nodes.find((n) => n.node_id === intent?.attrs?.alert_node_id);
+
+  return (
+    <>
+      <ShowNodeInGraph nodeId={item.node.node_id} />
+      <p className="aa__framing">{item.node.label}</p>
+      {alert && (
+        <div className="aa__trail">
+          Delivered for: <GraphLink nodeId={alert.node_id}>{alert.label}</GraphLink>
+        </div>
+      )}
+      {item.resourceUrl ? (
+        <div className="aa__autonomous">
+          <a href={item.resourceUrl} target="_blank" rel="noreferrer">
+            open record ▤
+          </a>
+        </div>
+      ) : (
+        <div className="aa__verify aa__verify--block">{item.outcome}</div>
+      )}
     </>
   );
 }

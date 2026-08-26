@@ -38,11 +38,24 @@ function getOrCreateReviewerId(): string {
   }
 }
 
+/** Backend disclosure events carry the raw internal identifier (e.g.
+ *  "surgbot_synthesis") — this is a presentation-only rename to the names
+ *  used in the product; the wire protocol / tests still assert the raw
+ *  strings, so only the frontend's display layer changes. Unmapped names
+ *  (STT/TTS, or anything future) just render as-is, not silently dropped. */
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  surgbot_root: "SurgBot Orchestrator",
+  surgbot_error_chain_reviewer: "Error Chain Review Agent",
+  surgbot_synthesis: "Case Review Agent",
+  surgbot_pattern_insight: "Cross-cases Coaching Agent",
+};
+
 /** Both fields are required by the disclosure contract (plan_v2 §14 — "the
  *  UI cannot render half-complete"); a missing one renders as a literal,
  *  visible "unknown" rather than being silently dropped or guessed at. */
 function agentDisplay(agentName: string | null): string {
-  return agentName ?? "unknown agent";
+  if (!agentName) return "unknown agent";
+  return AGENT_DISPLAY_NAMES[agentName] ?? agentName;
 }
 
 function modelSurfaceDisplay(modelId: string | null, apiSurface: string | null): string {
@@ -93,7 +106,7 @@ function orbLabel(state: string): string {
     case "error":
       return "SurgBot connection lost — press to retry";
     default:
-      return "Press and hold to talk to SurgBot";
+      return "Tap to Start Session";
   }
 }
 
@@ -245,37 +258,36 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
   return (
     <div className="sb__rail" style={style}>
       <header className="sb__header">
-        <h1>SurgBot</h1>
+        <div className="sb__header-title">
+          <h1>SurgBot</h1>
+          <p className="sb__header-tagline">Cross-case QA Assistant for surgeons & safety leads</p>
+        </div>
       </header>
       <div className="sb__content">
         {!open ? (
           <div className="sb__intro">
-            <p className="sb__intro-heading">
-              A post-surgery collaborative assistant helping surgeons and patient safety leads review the case.
-            </p>
-
             <div className="sb__card">
               <h3 className="sb__card-title">Agents at work</h3>
-              <ul className="sb__card-list">
+              <ul className="sb__card-list sb__card-list--grid">
                 <li>
-                  <span className="sb__card-item-name">Speech-to-Text</span>
-                  <span className="sb__card-item-meta">Cloud Speech (Chirp 3) · transcription</span>
-                </li>
-                <li>
-                  <span className="sb__card-item-name">SurgBot Root</span>
+                  <span className="sb__card-item-name">SurgBot Orchestrator</span>
                   <span className="sb__card-item-meta">Gemini 3.5 · tool dispatch &amp; reasoning</span>
                 </li>
                 <li>
-                  <span className="sb__card-item-name">Error Chain Reviewer</span>
+                  <span className="sb__card-item-name">Error Chain Review Agent</span>
                   <span className="sb__card-item-meta">Gemini 3.5 · mechanism &amp; citations</span>
                 </li>
                 <li>
-                  <span className="sb__card-item-name">Synthesis</span>
+                  <span className="sb__card-item-name">Case Review Agent</span>
                   <span className="sb__card-item-meta">Gemini 3.5 · drafts the case review</span>
                 </li>
                 <li>
-                  <span className="sb__card-item-name">Pattern Insight</span>
+                  <span className="sb__card-item-name">Cross-cases Coaching Agent</span>
                   <span className="sb__card-item-meta">Gemini 3.5 · cross-session coaching</span>
+                </li>
+                <li>
+                  <span className="sb__card-item-name">Speech-to-Text</span>
+                  <span className="sb__card-item-meta">Cloud Speech (Chirp 3) · transcription</span>
                 </li>
                 <li>
                   <span className="sb__card-item-name">Text-to-Speech</span>
@@ -286,7 +298,7 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
 
             <div className="sb__card">
               <h3 className="sb__card-title">GEAP services in use</h3>
-              <ul className="sb__card-list">
+              <ul className="sb__card-list sb__card-list--grid">
                 <li>
                   <span className="sb__card-item-name">Agent Runtime</span>
                   <span className="sb__card-item-meta">hosts all 4 agents above</span>
