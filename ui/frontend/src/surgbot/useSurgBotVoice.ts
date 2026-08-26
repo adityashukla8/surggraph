@@ -71,8 +71,17 @@ interface SurgBotVoiceResult {
    *  prompt (SurgBotPanel.tsx) that calls this instead. */
   retry: () => void;
   /** The fallback/manual path (§14 protocol's `text_turn`) — not the primary
-   *  UX, exposed only for SurgBotPanel's small escape-hatch toggle. */
+   *  UX, exposed only for SurgBotPanel's small escape-hatch toggle. Typed
+   *  input gets a typed reply back (speak=False server-side, plan_v2
+   *  §17) — no narration, so both modalities stay genuinely usable on
+   *  their own terms rather than one always dragging the other along. */
   sendTextTurn: (text: string) => void;
+  /** Stops the current turn's narration immediately (plan_v2 §17 — real
+   *  user report: no way to stop a long response without ending the whole
+   *  session). Stops local playback right away — doesn't wait for the
+   *  server's stop_narration acknowledgment — and lets the conversation
+   *  continue normally afterward. */
+  stopNarration: () => void;
 }
 
 /** Opens the SurgBot voice WebSocket, captures the mic as 16kHz mono PCM16
@@ -119,6 +128,12 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
   // any — lets tool_call_finished know it's the one that should mark the
   // active player complete, without a stale-closure read of toolEvents.
   const ttsCallIdRef = useRef<string | null>(null);
+  // Whether the CURRENT turn expects a spoken reply — audio turns (real
+  // hold-and-release) do; text_turn ones don't (speak=False server-side,
+  // plan_v2 §17). turnInProgress otherwise only resets when a reply clip
+  // finishes playing, which never happens for a text-only turn — this is
+  // what resets it right when the (text-only) reply text itself arrives.
+  const expectingAudioRef = useRef(true);
   // Read inside the AudioWorkletNode's onmessage handler, which fires many
   // times per second — a ref (not state) so gating the send doesn't need a
   // re-render on every single audio chunk, only isListening (the React
@@ -148,6 +163,7 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
       });
     }
     audioCtxRef.current = null;
+    expectingAudioRef.current = true;
     setIsListening(false);
     setTurnInProgress(false);
   }, []);
@@ -231,6 +247,14 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
           break;
         case "transcript_delta":
           handleTranscriptDelta(msg);
+          // A text-only turn (speak=False server-side) never gets a reply
+          // clip to trigger PcmChunkPlayer's onDrained — this is what
+          // resets turnInProgress for that case, right as the (only) reply
+          // text arrives. Audio turns are untouched here: their reset
+          // still waits for the reply to actually finish playing.
+          if (msg.speaker === "model" && msg.final && !expectingAudioRef.current) {
+            setTurnInProgress(false);
+          }
           break;
         case "review_document_ready":
           setReviewDocument({
@@ -419,9 +443,26 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
   const sendTextTurn = useCallback((text: string) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    expectingAudioRef.current = false;
     const msg: ClientMessage = { type: "text_turn", text };
     ws.send(JSON.stringify(msg));
     setTurnInProgress(true);
+  }, []);
+
+  const stopNarration = useCallback(() => {
+    // Stops local playback IMMEDIATELY — the whole point is instant
+    // response, so this doesn't wait for the server's acknowledgment.
+    // markComplete() isn't right here (that means "no more chunks are
+    // coming, but let what's already scheduled finish") — stop() cuts
+    // audio off mid-clip, which is exactly what "stop" should do.
+    playerRef.current?.stop();
+    playerRef.current = null;
+    ttsCallIdRef.current = null;
+    setTurnInProgress(false);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const msg: ClientMessage = { type: "stop_narration" };
+    ws.send(JSON.stringify(msg));
   }, []);
 
   const startTalking = useCallback(() => {
@@ -438,6 +479,7 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     setIsListening(false);
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    expectingAudioRef.current = true;
     // Every chunk was already sent as it was captured (see node.port.
     // onmessage above) — mic_stop just signals the turn's audio is
     // complete, so the server can finalize its already-in-progress
@@ -473,5 +515,6 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     startTalking,
     stopTalking,
     sendTextTurn,
+    stopNarration,
   };
 }

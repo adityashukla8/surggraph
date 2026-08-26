@@ -59,11 +59,11 @@ export interface EndSessionMessage {
   type: "end_session";
 }
 
-/** Push-to-talk turn boundaries (plan_v2 §15 — classic STT -> LLM -> TTS
- *  pipeline, no Live API involved anymore). mic_start clears the server's
- *  per-turn audio accumulator; the client then streams binary PCM frames
- *  while held; mic_stop signals the accumulated clip is complete and ready
- *  for Cloud Speech-to-Text — see services/surgbot_service/main.py. */
+/** Push-to-talk turn boundaries (plan_v2 §16 — classic STT -> LLM -> TTS
+ *  pipeline, streamed both directions). mic_start opens a real server-side
+ *  StreamingRecognize session; the client then streams binary PCM frames
+ *  to it AS CAPTURED (not accumulated); mic_stop finalizes that
+ *  already-in-progress recognition — see services/surgbot_service/main.py. */
 export interface MicStartMessage {
   type: "mic_start";
 }
@@ -72,11 +72,20 @@ export interface MicStopMessage {
   type: "mic_stop";
 }
 
+/** Stops the current turn's narration immediately (plan_v2 §17 — real user
+ *  report: no way to stop a long response without ending the whole
+ *  session). The conversation itself is untouched — the reviewer can
+ *  start a new turn right away. */
+export interface StopNarrationMessage {
+  type: "stop_narration";
+}
+
 export type ClientMessage =
   | SessionStartMessage
   | TextTurnMessage
   | EndSessionMessage
   | MicStartMessage
+  | StopNarrationMessage
   | MicStopMessage;
 
 // ---------------------------------------------------------------------------

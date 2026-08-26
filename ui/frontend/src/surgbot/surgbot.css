@@ -30,6 +30,24 @@
   overflow-y: auto;
 }
 
+/* Mirrors .dashboard__header/h1 (App.css) — same visual weight as the
+ * "SurgGraph" title on the other side of the split, always visible
+ * (intro and chat views alike), not just in the collapsed-strip label. */
+.sb__header {
+  display: flex;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  flex: 0 0 auto;
+}
+
+.sb__header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
 @keyframes sb-fade {
   0%, 100% { opacity: 0.55; }
   50% { opacity: 1; }
@@ -188,6 +206,7 @@
 .sb__status-dot--connecting { background: var(--status-warning); }
 .sb__status-dot--disconnected { background: var(--status-critical); }
 
+.sb__stop-narration-btn,
 .sb__end-session-btn {
   margin-left: auto;
   flex: 0 0 auto;
@@ -199,6 +218,15 @@
   font-size: 10.5px;
   font-family: inherit;
   cursor: pointer;
+}
+/* Only .sb__end-session-btn should absorb the row's leftover space when
+ * both buttons are present — .sb__stop-narration-btn just sits next to it. */
+.sb__stop-narration-btn + .sb__end-session-btn {
+  margin-left: 0;
+}
+.sb__stop-narration-btn:hover {
+  border-color: var(--status-warning);
+  color: var(--status-warning);
 }
 .sb__end-session-btn:hover {
   border-color: var(--status-critical);

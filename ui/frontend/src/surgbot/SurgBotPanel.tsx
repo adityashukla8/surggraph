@@ -140,6 +140,7 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
     startTalking,
     stopTalking,
     sendTextTurn,
+    stopNarration,
   } = useSurgBotVoice();
 
   const orbState = useMemo(() => {
@@ -218,6 +219,9 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
 
   return (
     <div className="sb__rail" style={style}>
+      <header className="sb__header">
+        <h1>SurgBot</h1>
+      </header>
       <div className="sb__content">
         {!open ? (
           <div className="sb__intro">
@@ -307,6 +311,16 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                 {status === "connected" && "Connected"}
                 {status === "disconnected" && (error ?? "Connection lost")}
               </span>
+              {/* Real user report: no way to stop a long narration without
+                  ending the whole session. Only shown while SurgBot is
+                  actually speaking — stopping the current turn is a
+                  different action from ending the session (below), so
+                  each gets its own control rather than overloading one. */}
+              {isModelSpeaking && (
+                <button className="sb__stop-narration-btn" onClick={stopNarration} title="Stop narration">
+                  Stop narration
+                </button>
+              )}
               {/* Ending the session is deliberately its own control, separate
                   from the orb — push-to-talk now owns the orb's press/hold
                   gesture entirely, so ending the session can never be

@@ -58,9 +58,11 @@ explicitly out of scope — real, disclosed, not something this pass touches.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -222,7 +224,64 @@ async def _send_json(websocket: WebSocket, payload: dict[str, Any]) -> None:
     await websocket.send_text(json.dumps(payload))
 
 
-async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any], text: str) -> None:
+# Real user report this session: the model's markdown-formatted text (###
+# headers, **bold**, bullet lists) was being narrated literally ("hash hash
+# hash", "asterisk asterisk") and shown with the raw syntax still visible in
+# the transcript feed — both symptoms of the same root cause (raw markdown
+# used unprocessed for both speech and display). Not a full markdown parser
+# (no HTML, no rendering) — just enough to turn the syntax this model
+# actually produces into clean, readable prose for both purposes at once.
+_MD_HRULE_RE = re.compile(r"^[ \t]*-{3,}[ \t]*$", re.MULTILINE)
+_MD_HEADER_RE = re.compile(r"^#{1,6}[ \t]+", re.MULTILINE)
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+_MD_BULLET_RE = re.compile(r"^[ \t]*[-*+][ \t]+", re.MULTILINE)
+_MD_NUMBERED_RE = re.compile(r"^[ \t]*\d+\.[ \t]+", re.MULTILINE)
+_MD_CODE_RE = re.compile(r"`([^`]+)`")
+_MD_BLANK_RUN_RE = re.compile(r"\n{3,}")
+
+
+def _strip_markdown_for_speech(text: str) -> str:
+    # Real bug caught while testing this against the exact text from a real
+    # user report: bullet/numbered markers MUST be stripped before bold/
+    # italic — a leading "*  *Mechanism:*" (bullet marker immediately
+    # followed by an italic-opening marker) let the italic regex pair the
+    # BULLET's own "*" with the italic's OPENING "*" instead of its real
+    # closing one, leaving a stray trailing "*" behind ("Mechanism:*").
+    # Stripping the bullet marker first removes the ambiguity entirely.
+    result = _MD_HRULE_RE.sub("", text)
+    result = _MD_HEADER_RE.sub("", result)
+    result = _MD_BULLET_RE.sub("", result)
+    result = _MD_NUMBERED_RE.sub("", result)
+    result = _MD_BOLD_RE.sub(r"\1", result)
+    result = _MD_ITALIC_RE.sub(r"\1", result)
+    result = _MD_CODE_RE.sub(r"\1", result)
+    return _MD_BLANK_RUN_RE.sub("\n\n", result).strip()
+
+
+async def _send_tool_call_started(
+    websocket: WebSocket, state: dict[str, Any], call_id: str, tool_name: str, args_summary: str, disclosure: dict[str, str]
+) -> None:
+    """Sends tool_call_started AND records it as the session's active call
+    — stop_narration (see surgbot_voice's main loop) uses this to close out
+    whatever chip is open when a turn gets cancelled, instead of leaving it
+    stuck showing "running..." forever."""
+    state["active_call_id"] = call_id
+    await _send_json(
+        websocket,
+        {"type": "tool_call_started", "call_id": call_id, "tool_name": tool_name, "args_summary": args_summary, **disclosure},
+    )
+
+
+async def _send_tool_call_finished(websocket: WebSocket, state: dict[str, Any], call_id: str, summary: str) -> None:
+    if state.get("active_call_id") == call_id:
+        state["active_call_id"] = None
+    await _send_json(websocket, {"type": "tool_call_finished", "call_id": call_id, "summary": summary})
+
+
+async def _send_turn_to_agent(
+    websocket: WebSocket, engine, state: dict[str, Any], text: str, *, speak: bool = True
+) -> None:
     """Sends one real turn to the deployed root agent via async_stream_query
     and relays every resulting event to the browser — phase_changed and
     tool_call_started/finished exactly as before (same TOOL_PHASE_MAP/
@@ -230,7 +289,14 @@ async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any
     ready special case), just sourced from a plain async_stream_query
     iterator instead of a bidi_stream_query connection's receive() loop.
     Ends with one final transcript_delta (the model's real cumulative
-    reply) and dispatches that reply through Cloud TTS.
+    reply, markdown stripped for both display and speech) and, if
+    speak=True, dispatches that reply through Cloud TTS.
+
+    speak=False is the real fix for typed input getting a spoken-and-typed
+    response back: a reviewer typing into the text fallback almost
+    certainly wants a typed reply, not narration — surgbot_voice's main
+    loop passes speak=False for text_turn, speak=True (the default) for a
+    real push-to-talk audio turn.
 
     The FIRST real turn of a session gets a one-time bracketed
     `[context: ...]` tag prepended (see root_agent.py's own instruction) —
@@ -269,15 +335,8 @@ async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any
                         asyncio.create_task(store.update_session(state["session_id"], current_phase=phase))
 
                     disclosure = _disclosure_for(tool_name)
-                    await _send_json(
-                        websocket,
-                        {
-                            "type": "tool_call_started",
-                            "call_id": call_id,
-                            "tool_name": tool_name,
-                            "args_summary": json.dumps(function_call.get("args", {}))[:300],
-                            **disclosure,
-                        },
+                    await _send_tool_call_started(
+                        websocket, state, call_id, tool_name, json.dumps(function_call.get("args", {}))[:300], disclosure
                     )
 
                 function_response = part.get("function_response")
@@ -286,7 +345,7 @@ async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any
                     tool_name = open_calls.pop(call_id, function_response.get("name", ""))
                     response_body = function_response.get("response", {})
                     summary = json.dumps(response_body)[:300]
-                    await _send_json(websocket, {"type": "tool_call_finished", "call_id": call_id, "summary": summary})
+                    await _send_tool_call_finished(websocket, state, call_id, summary)
 
                     if tool_name == "draft_review_document" and isinstance(response_body, dict) and response_body.get("drafted"):
                         await _send_json(
@@ -316,7 +375,19 @@ async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any
         logger.warning("surgbot voice ws[%s]: async_stream_query produced no final text — nothing to speak", state["session_id"])
         return
 
-    await _send_json(websocket, {"type": "transcript_delta", "speaker": "model", "text": final_text, "final": True})
+    # Real user report this session: raw markdown (### headers, **bold**,
+    # bullet lists) was both shown with the literal syntax visible AND
+    # narrated literally ("hash hash hash"). One cleaned copy, used for
+    # both the displayed transcript and (if speak) the TTS input, so
+    # there's no risk of the two drifting apart.
+    display_text = _strip_markdown_for_speech(final_text)
+    await _send_json(websocket, {"type": "transcript_delta", "speaker": "model", "text": display_text, "final": True})
+
+    if not speak:
+        # Real user report this session: typed input got a SPOKEN reply
+        # back too — a reviewer using the text fallback almost certainly
+        # wants a typed one. No TTS call at all for a text_turn.
+        return
 
     # Streaming TTS (plan_v2 §16): sends each synthesized sentence as its
     # own binary frame as soon as it's ready, instead of waiting for the
@@ -328,23 +399,25 @@ async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any
     # finished (sent after the last chunk) doubles as the "no more audio
     # coming for this turn" signal — the frontend uses it to know when to
     # stop waiting for further chunks, same real event already used to end
-    # a bookkeeping window elsewhere in this protocol.
+    # a bookkeeping window elsewhere in this protocol. Cancelling THIS
+    # coroutine mid-stream (surgbot_voice's stop_narration handling) simply
+    # stops the async for loop from sending any further chunks — the
+    # caller is responsible for closing out the tool_call_started chip.
     tts_call_id = f"c-{uuid.uuid4().hex[:8]}"
-    await _send_json(
-        websocket,
-        {"type": "tool_call_started", "call_id": tts_call_id, "tool_name": "synthesize_speech", "args_summary": f"{len(final_text)} chars", **_TTS_DISCLOSURE},
+    await _send_tool_call_started(
+        websocket, state, tts_call_id, "synthesize_speech", f"{len(display_text)} chars", _TTS_DISCLOSURE
     )
     total_bytes = 0
     try:
-        async for chunk in speech.synthesize_speech_streaming(final_text):
+        async for chunk in speech.synthesize_speech_streaming(display_text):
             total_bytes += len(chunk)
             await websocket.send_bytes(chunk)
     except Exception as exc:
         logger.exception("surgbot voice ws[%s]: synthesize_speech_streaming failed", state["session_id"])
-        await _send_json(websocket, {"type": "tool_call_finished", "call_id": tts_call_id, "summary": f"error: {exc}"})
+        await _send_tool_call_finished(websocket, state, tts_call_id, f"error: {exc}")
         await _send_json(websocket, {"type": "error", "detail": f"Text-to-speech failed: {exc}"})
         return
-    await _send_json(websocket, {"type": "tool_call_finished", "call_id": tts_call_id, "summary": f"{total_bytes} bytes"})
+    await _send_tool_call_finished(websocket, state, tts_call_id, f"{total_bytes} bytes")
 
 
 async def _handle_audio_turn(
@@ -366,25 +439,18 @@ async def _handle_audio_turn(
         "surgbot voice ws[%s]: finalizing streaming transcribe_audio (%d bytes pushed)",
         state["session_id"], stt_session.bytes_pushed,
     )
-    await _send_json(
-        websocket,
-        {
-            "type": "tool_call_started",
-            "call_id": call_id,
-            "tool_name": "transcribe_audio",
-            "args_summary": f"streaming, {stt_session.bytes_pushed} bytes",
-            **_STT_DISCLOSURE,
-        },
+    await _send_tool_call_started(
+        websocket, state, call_id, "transcribe_audio", f"streaming, {stt_session.bytes_pushed} bytes", _STT_DISCLOSURE
     )
     try:
         transcript = await stt_session.finish()
     except Exception as exc:
         logger.exception("surgbot voice ws[%s]: streaming transcribe_audio failed", state["session_id"])
-        await _send_json(websocket, {"type": "tool_call_finished", "call_id": call_id, "summary": f"error: {exc}"})
+        await _send_tool_call_finished(websocket, state, call_id, f"error: {exc}")
         await _send_json(websocket, {"type": "error", "detail": f"Speech-to-text failed: {exc}"})
         return
     logger.info("surgbot voice ws[%s]: transcribe_audio -> %r", state["session_id"], transcript)
-    await _send_json(websocket, {"type": "tool_call_finished", "call_id": call_id, "summary": transcript[:300]})
+    await _send_tool_call_finished(websocket, state, call_id, transcript[:300])
 
     if not transcript:
         await _send_json(websocket, {"type": "error", "detail": "No speech detected — press and hold, then try again."})
@@ -392,6 +458,36 @@ async def _handle_audio_turn(
 
     await _send_json(websocket, {"type": "transcript_delta", "speaker": "user", "text": transcript, "final": True})
     await _send_turn_to_agent(websocket, engine, state, transcript)
+
+
+async def _run_turn(coro) -> None:
+    """Wraps a turn-processing coroutine so it's safe to run as a
+    background asyncio.Task (see surgbot_voice's main loop, plan_v2 §17 —
+    stop_narration): swallows a real cancellation quietly (that IS the
+    stop-narration path working as intended, not an error) and is a last-
+    resort safety net for anything genuinely unexpected escaping the
+    turn's own error handling."""
+    try:
+        await coro
+    except asyncio.CancelledError:
+        logger.info("surgbot voice ws: turn task cancelled")
+    except Exception:
+        logger.exception("surgbot voice ws: turn task raised unexpectedly")
+
+
+async def _cancel_turn_task(state: dict[str, Any]) -> None:
+    """Cancels the session's in-flight turn task, if any, and waits for it
+    to actually finish unwinding before returning — real correctness
+    requirement, not just tidiness: without this wait, a late write from
+    the cancelled task could interleave with whatever the caller sends
+    next on the SAME WebSocket, since Starlette's WebSocket has no built-in
+    protection against two coroutines both calling .send() concurrently."""
+    task = state.get("turn_task")
+    if task is not None and not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    state["turn_task"] = None
 
 
 @app.websocket("/surgbot/{session_id}/voice")
@@ -442,6 +538,10 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
         "agent_session_id": agent_session_id,
         "current_phase": None,
         "context_sent": False,
+        # The in-flight turn's background task and its currently-open
+        # disclosure chip's call_id, if any (plan_v2 §17 — stop_narration).
+        "turn_task": None,
+        "active_call_id": None,
     }
     # Real streaming Speech-to-Text turn (plan_v2 §16) — created fresh on
     # each mic_start, fed every captured chunk AS IT ARRIVES (not
@@ -475,6 +575,11 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
 
             msg_type = control.get("type")
             if msg_type == "mic_start":
+                # A fresh turn starting implies abandoning any straggling
+                # previous one — same real correctness reason as
+                # stop_narration (§_cancel_turn_task's own docstring):
+                # never let two turns write to the same socket at once.
+                await _cancel_turn_task(state)
                 # Real StreamingRecognize session, started immediately —
                 # audio pushed below (in the binary-frame branch) starts
                 # reaching Cloud Speech-to-Text while the reviewer is still
@@ -483,11 +588,32 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
                 stt_session.start()
             elif msg_type == "mic_stop":
                 session_to_finish, stt_session = stt_session, None
-                await _handle_audio_turn(websocket, engine, state, session_to_finish)
+                state["turn_task"] = asyncio.create_task(
+                    _run_turn(_handle_audio_turn(websocket, engine, state, session_to_finish))
+                )
             elif msg_type == "text_turn":
-                await _send_turn_to_agent(websocket, engine, state, control.get("text", ""))
+                await _cancel_turn_task(state)
+                # speak=False (plan_v2 §17): a reviewer typing into the
+                # text fallback almost certainly wants a typed reply back,
+                # not narration — real user report this session.
+                state["turn_task"] = asyncio.create_task(
+                    _run_turn(_send_turn_to_agent(websocket, engine, state, control.get("text", ""), speak=False))
+                )
+            elif msg_type == "stop_narration":
+                # Real user report this session: no way to stop a long
+                # narration without ending the whole session. Closes out
+                # whatever chip was open (so it doesn't show "running..."
+                # forever) and cancels the in-flight turn — the reviewer
+                # can immediately start a new one; the session/ADK
+                # conversation itself is untouched.
+                active_call_id = state.get("active_call_id")
+                await _cancel_turn_task(state)
+                if active_call_id:
+                    await _send_tool_call_finished(websocket, state, active_call_id, "stopped by reviewer")
+                logger.info("surgbot voice ws[%s]: stop_narration — cancelled in-flight turn", session_id)
             elif msg_type == "end_session":
                 logger.info("surgbot voice ws[%s]: browser sent end_session", session_id)
+                await _cancel_turn_task(state)
                 break
             elif msg_type == "session_start":
                 # Already consumed before this loop starts; a duplicate is
