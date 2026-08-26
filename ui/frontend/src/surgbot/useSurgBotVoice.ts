@@ -447,6 +447,17 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     const msg: ClientMessage = { type: "text_turn", text };
     ws.send(JSON.stringify(msg));
     setTurnInProgress(true);
+    // Real user report: typed input wasn't showing up in the feed at all
+    // — a real gap, not a display bug. The audio path gets its user
+    // bubble from the server's own transcript_delta (real STT output,
+    // unknown to the client beforehand); a typed turn has no equivalent
+    // round trip to wait for — the client already knows the exact text,
+    // so it adds the bubble itself rather than waiting on an echo the
+    // server never had a reason to send.
+    setTranscript((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, speaker: "user", text, final: true, at: Date.now() },
+    ]);
   }, []);
 
   const stopNarration = useCallback(() => {
