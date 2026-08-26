@@ -180,4 +180,8 @@ export interface ReviewDocument {
   review_id: string;
   sections: Record<string, string>;
   approval_status: ApprovalStatus;
+  /** Date.now() when this review_id first appeared — kept stable across
+   *  later status updates (approve/edit/reject) so its position in the
+   *  chronological feed doesn't jump every time its status changes. */
+  at: number;
 }

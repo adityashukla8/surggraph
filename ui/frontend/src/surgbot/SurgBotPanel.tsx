@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { PHASE_FALLBACK_LABELS, REVIEW_PHASES } from "./types";
-import type { ReviewPhase, ToolCallEvent, TranscriptEntry } from "./types";
+import type { ReviewDocument, ReviewPhase, ToolCallEvent, TranscriptEntry } from "./types";
 import { useSurgBotVoice } from "./useSurgBotVoice";
 import { ReviewDocumentPanel } from "./ReviewDocumentPanel";
 import "./surgbot.css";
@@ -60,13 +60,23 @@ function modelSurfaceDisplay(modelId: string | null, apiSurface: string | null):
 
 type FeedRow =
   | { kind: "transcript"; at: number; entry: TranscriptEntry }
-  | { kind: "tool"; at: number; event: ToolCallEvent };
+  | { kind: "tool"; at: number; event: ToolCallEvent }
+  | { kind: "document"; at: number; doc: ReviewDocument };
 
-function buildFeed(transcript: TranscriptEntry[], toolEvents: ToolCallEvent[]): FeedRow[] {
+function buildFeed(
+  transcript: TranscriptEntry[],
+  toolEvents: ToolCallEvent[],
+  reviewDocument: ReviewDocument | null,
+): FeedRow[] {
   const rows: FeedRow[] = [
     ...transcript.map((entry): FeedRow => ({ kind: "transcript", at: entry.at, entry })),
     ...toolEvents.map((event): FeedRow => ({ kind: "tool", at: event.at, event })),
   ];
+  // Rendered inline in the chronological feed (like a shared file bubble),
+  // not pinned below it — real user report: a fixed 40vh block stuck to the
+  // chat's bottom border made it impossible to keep chatting after the
+  // document appeared.
+  if (reviewDocument) rows.push({ kind: "document", at: reviewDocument.at, doc: reviewDocument });
   return rows.sort((a, b) => a.at - b.at);
 }
 
@@ -121,8 +131,20 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
   const [open, setOpen] = useState(false);
   const [showTextFallback, setShowTextFallback] = useState(false);
   const [fallbackText, setFallbackText] = useState("");
+  // Tool/agent-use chips default to a collapsed (clamped) summary — clicking
+  // one toggles it into this set to show its full, unclamped text.
+  const [expandedChips, setExpandedChips] = useState<ReadonlySet<string>>(new Set());
   const reviewerIdRef = useRef<string>(getOrCreateReviewerId());
   const feedRef = useRef<HTMLDivElement | null>(null);
+
+  function toggleChipExpanded(callId: string) {
+    setExpandedChips((prev) => {
+      const next = new Set(prev);
+      if (next.has(callId)) next.delete(callId);
+      else next.add(callId);
+      return next;
+    });
+  }
 
   const {
     status,
@@ -152,7 +174,10 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
     return "idle";
   }, [status, isListening, isModelSpeaking]);
 
-  const feed = useMemo(() => buildFeed(transcript, toolEvents), [transcript, toolEvents]);
+  const feed = useMemo(
+    () => buildFeed(transcript, toolEvents, reviewDocument),
+    [transcript, toolEvents, reviewDocument],
+  );
 
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
@@ -299,10 +324,6 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
           </div>
         ) : (
           <div className="sb__chat" role="dialog" aria-label="SurgBot voice review">
-            <div className="sb__banner" role="note">
-              Voice via Cloud Speech-to-Text / Text-to-Speech (Chirp 3) — all reasoning runs on Gemini 3.5.
-            </div>
-
             <div className="sb__status-row">
               <span className={`sb__status-dot sb__status-dot--${status}`} aria-hidden="true" />
               <span className="sb__status-text">
@@ -354,14 +375,27 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                   {status === "connected" ? "Say hello to start the review." : "Waiting to connect…"}
                 </p>
               ) : (
-                feed.map((row) =>
-                  row.kind === "transcript" ? (
-                    <div key={row.entry.id} className={`sb__turn sb__turn--${row.entry.speaker}`}>
-                      {row.entry.text}
-                      {!row.entry.final && <span className="sb__turn-cursor" aria-hidden="true">▌</span>}
-                    </div>
-                  ) : (
-                    <div key={row.event.call_id} className={`sb__tool-chip sb__tool-chip--${row.event.status}`}>
+                feed.map((row) => {
+                  if (row.kind === "transcript") {
+                    return (
+                      <div key={row.entry.id} className={`sb__turn sb__turn--${row.entry.speaker}`}>
+                        {row.entry.text}
+                        {!row.entry.final && <span className="sb__turn-cursor" aria-hidden="true">▌</span>}
+                      </div>
+                    );
+                  }
+                  if (row.kind === "document") {
+                    return <ReviewDocumentPanel key={row.doc.review_id} reviewDocument={row.doc} />;
+                  }
+                  const isExpanded = expandedChips.has(row.event.call_id);
+                  return (
+                    <button
+                      key={row.event.call_id}
+                      type="button"
+                      className={`sb__tool-chip sb__tool-chip--${row.event.status}${isExpanded ? " sb__tool-chip--expanded" : ""}`}
+                      onClick={() => toggleChipExpanded(row.event.call_id)}
+                      aria-expanded={isExpanded}
+                    >
                       <span className="sb__tool-chip-agent">{agentDisplay(row.event.agent_name)}</span>
                       <span className="sb__tool-chip-sep">·</span>
                       <span className="sb__tool-chip-model">{modelSurfaceDisplay(row.event.model_id, row.event.api_surface)}</span>
@@ -371,9 +405,9 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                       ) : (
                         row.event.summary && <span className="sb__tool-chip-summary">{row.event.summary}</span>
                       )}
-                    </div>
-                  ),
-                )
+                    </button>
+                  );
+                })
               )}
             </div>
 
@@ -387,8 +421,6 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                 </button>
               </div>
             )}
-
-            {reviewDocument && <ReviewDocumentPanel reviewDocument={reviewDocument} />}
 
             <div className="sb__fallback">
               <button className="sb__fallback-toggle" onClick={() => setShowTextFallback((v) => !v)}>

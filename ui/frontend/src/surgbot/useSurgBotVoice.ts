@@ -257,11 +257,15 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
           }
           break;
         case "review_document_ready":
-          setReviewDocument({
+          setReviewDocument((prev) => ({
             review_id: msg.review_id,
             sections: msg.sections,
             approval_status: msg.approval_status as ApprovalStatus,
-          });
+            // Same document getting a status update (e.g. approved after
+            // edit) keeps its original feed position; only a genuinely new
+            // review_id gets a fresh timestamp.
+            at: prev && prev.review_id === msg.review_id ? prev.at : Date.now(),
+          }));
           break;
         case "error":
           // A failed turn anywhere in the STT -> LLM -> TTS pipeline (no

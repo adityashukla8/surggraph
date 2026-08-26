@@ -114,9 +114,13 @@ def main() -> int:
     synthesis_resource = subagent_cache.get("synthesis")
     if not synthesis_resource:
         raise SystemExit(f"{_SUBAGENT_CACHE} has no 'synthesis' entry — run scripts/deploy_surgbot_subagents.py first")
+    error_chain_resource = subagent_cache.get("error_chain_reviewer")
+    pattern_insight_resource = subagent_cache.get("pattern_insight")
 
     print(f"Root agent resource: {root_resource}")
     print(f"Synthesis subagent resource: {synthesis_resource}")
+    print(f"Error chain reviewer subagent resource: {error_chain_resource}")
+    print(f"Pattern insight subagent resource: {pattern_insight_resource}")
 
     ok_root = register_service(
         "surgbot-root-agent",
@@ -130,13 +134,32 @@ def main() -> int:
         "SurgBot's Phase 6 case-review synthesis subagent — real Gemini 3.5, deployed with Agent Identity.",
         synthesis_resource,
     )
+    # error_chain_reviewer/pattern_insight were never registered at all
+    # (only root + synthesis were) — real gap found reviewing the Agent
+    # Registry topology view, which showed no entry for either.
+    ok_error_chain = True
+    if error_chain_resource:
+        ok_error_chain = register_service(
+            "surgbot-error-chain-reviewer-subagent",
+            "SurgBot Error Chain Reviewer Subagent",
+            "SurgBot's Phase 3 error-mechanism-and-citation review subagent — real Gemini 3.5, deployed with Agent Identity.",
+            error_chain_resource,
+        )
+    ok_pattern_insight = True
+    if pattern_insight_resource:
+        ok_pattern_insight = register_service(
+            "surgbot-pattern-insight-subagent",
+            "SurgBot Pattern Insight Subagent",
+            "SurgBot's Phase 7 cross-session reviewer-pattern subagent — real Gemini 3.5, deployed with Agent Identity.",
+            pattern_insight_resource,
+        )
 
     print("\n=== Verifying via `gcloud agent-registry services list` ===")
     verify = _run(["gcloud", "agent-registry", "services", "list", f"--location={REGION}", f"--project={PROJECT_ID}"])
 
-    success = ok_root and ok_synthesis and verify.returncode == 0
+    success = ok_root and ok_synthesis and ok_error_chain and ok_pattern_insight and verify.returncode == 0
     if success:
-        print("\nREGISTRATION SUCCEEDED for both agents — see the services list above.")
+        print("\nREGISTRATION SUCCEEDED for all 4 agents — see the services list above.")
     else:
         print("\nREGISTRATION DID NOT FULLY SUCCEED — see output above.")
     return 0 if success else 1

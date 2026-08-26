@@ -41,6 +41,11 @@ export function ReviewDocumentPanel({ reviewDocument }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApprovalOutcome | null>(null);
+  // Renders inline in the chat feed like a shared file bubble (real user
+  // report: a fixed block pinned below the feed ate a lot of space and
+  // blocked chatting past it) — collapsed by default so it stays compact;
+  // clicking the header opens it to review/act on.
+  const [collapsed, setCollapsed] = useState(true);
 
   // A fresh review_id (a new Phase-6 draft, e.g. after a reject-and-resynthesize)
   // resets local edit/result state — never carries a stale "approved" banner
@@ -50,6 +55,7 @@ export function ReviewDocumentPanel({ reviewDocument }: Props) {
     setMode("view");
     setResult(null);
     setError(null);
+    setCollapsed(true);
   }, [reviewDocument.review_id, reviewDocument.sections]);
 
   async function submit(outcome: ApprovalOutcome) {
@@ -81,75 +87,98 @@ export function ReviewDocumentPanel({ reviewDocument }: Props) {
   }
 
   const sectionEntries = Object.entries(reviewDocument.sections);
+  const statusLabel = result ? RESULT_LABEL[result] : reviewDocument.approval_status;
 
   return (
-    <section className="sb__review" aria-label="Case review document">
-      <div className="sb__review-header">
-        <h4>Case Review Document</h4>
-        <span className={`sb__review-status sb__review-status--${result ?? reviewDocument.approval_status}`}>
-          {result ? RESULT_LABEL[result] : reviewDocument.approval_status}
+    <section
+      className={`sb__doc-artifact${collapsed ? "" : " sb__doc-artifact--expanded"}`}
+      aria-label="Case review document"
+    >
+      <button
+        type="button"
+        className="sb__doc-artifact-header"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+      >
+        <span className="sb__doc-artifact-title">
+          <span className="sb__doc-artifact-name">Case Review Document</span>
+          <span className="sb__doc-artifact-meta">
+            {sectionEntries.length === 0
+              ? "Drafting…"
+              : `${sectionEntries.length} section${sectionEntries.length === 1 ? "" : "s"}`}
+          </span>
         </span>
-      </div>
+        <span className={`sb__review-status sb__review-status--${result ?? reviewDocument.approval_status}`}>
+          {statusLabel}
+        </span>
+        <span className="sb__doc-artifact-chevron" aria-hidden="true">
+          {collapsed ? "▸" : "▾"}
+        </span>
+      </button>
 
-      {sectionEntries.length === 0 ? (
-        <p className="sb__review-empty">Drafting — no sections yet.</p>
-      ) : (
-        <div className="sb__review-sections">
-          {sectionEntries.map(([key, originalValue]) => (
-            <div className="sb__review-section" key={key}>
-              <div className="sb__review-section-label">{formatSectionLabel(key)}</div>
+      {!collapsed && (
+        <div className="sb__doc-artifact-body">
+          {sectionEntries.length === 0 ? (
+            <p className="sb__review-empty">Drafting — no sections yet.</p>
+          ) : (
+            <div className="sb__review-sections">
+              {sectionEntries.map(([key, originalValue]) => (
+                <div className="sb__review-section" key={key}>
+                  <div className="sb__review-section-label">{formatSectionLabel(key)}</div>
+                  {mode === "edit" ? (
+                    <textarea
+                      className="sb__review-textarea"
+                      value={draft[key] ?? ""}
+                      onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
+                      rows={4}
+                      aria-label={`Edit ${formatSectionLabel(key)}`}
+                    />
+                  ) : (
+                    <p className="sb__review-text">{draft[key] ?? originalValue}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {result ? (
+            <div className="sb__review-resolved">{RESULT_LABEL[result]}</div>
+          ) : (
+            <div className="sb__review-actions">
               {mode === "edit" ? (
-                <textarea
-                  className="sb__review-textarea"
-                  value={draft[key] ?? ""}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
-                  rows={4}
-                  aria-label={`Edit ${formatSectionLabel(key)}`}
-                />
+                <>
+                  <button className="sb__btn sb__btn--primary" disabled={busy} onClick={() => submit("edited")}>
+                    Save &amp; Approve
+                  </button>
+                  <button
+                    className="sb__btn"
+                    disabled={busy}
+                    onClick={() => {
+                      setMode("view");
+                      setDraft(reviewDocument.sections);
+                    }}
+                  >
+                    Cancel edit
+                  </button>
+                </>
               ) : (
-                <p className="sb__review-text">{draft[key] ?? originalValue}</p>
+                <>
+                  <button className="sb__btn sb__btn--primary" disabled={busy} onClick={() => submit("approved")}>
+                    Approve
+                  </button>
+                  <button className="sb__btn" disabled={busy} onClick={() => setMode("edit")}>
+                    Edit
+                  </button>
+                  <button className="sb__btn sb__btn--danger" disabled={busy} onClick={() => submit("rejected")}>
+                    Reject
+                  </button>
+                </>
               )}
             </div>
-          ))}
-        </div>
-      )}
-
-      {result ? (
-        <div className="sb__review-resolved">{RESULT_LABEL[result]}</div>
-      ) : (
-        <div className="sb__review-actions">
-          {mode === "edit" ? (
-            <>
-              <button className="sb__btn sb__btn--primary" disabled={busy} onClick={() => submit("edited")}>
-                Save &amp; Approve
-              </button>
-              <button
-                className="sb__btn"
-                disabled={busy}
-                onClick={() => {
-                  setMode("view");
-                  setDraft(reviewDocument.sections);
-                }}
-              >
-                Cancel edit
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="sb__btn sb__btn--primary" disabled={busy} onClick={() => submit("approved")}>
-                Approve
-              </button>
-              <button className="sb__btn" disabled={busy} onClick={() => setMode("edit")}>
-                Edit
-              </button>
-              <button className="sb__btn sb__btn--danger" disabled={busy} onClick={() => submit("rejected")}>
-                Reject
-              </button>
-            </>
           )}
+          {error && <div className="sb__review-error">{error}</div>}
         </div>
       )}
-      {error && <div className="sb__review-error">{error}</div>}
     </section>
   );
 }

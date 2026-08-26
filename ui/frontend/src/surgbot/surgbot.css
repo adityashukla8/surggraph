@@ -174,17 +174,6 @@
   flex-direction: column;
 }
 
-/* Persistent, non-dismissible disclosure — no close affordance by design. */
-.sb__banner {
-  flex: 0 0 auto;
-  padding: 9px 14px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--series-4) 18%, var(--surface-1));
-  border-bottom: 1px solid var(--border);
-}
-
 .sb__status-row {
   flex: 0 0 auto;
   display: flex;
@@ -306,7 +295,11 @@
 }
 
 .sb__turn {
-  max-width: 88%;
+  /* Capped so bubbles still read as a chat once the rail is expanded wide
+     (real user report: bubbles grew to ~70% of a fully-expanded panel) —
+     a floor keeps them from getting unreadably narrow in the default,
+     much-narrower docked width. */
+  max-width: clamp(220px, 50%, 640px);
   padding: 6px 10px;
   border-radius: 12px;
   line-height: 1.4;
@@ -350,6 +343,14 @@
   background: color-mix(in srgb, var(--series-7) 10%, var(--surface-1));
   font-size: 11.5px;
   color: var(--text-secondary);
+  /* Now a real <button> (click to expand/collapse the summary) — reset the
+     native button chrome back to the chip's own pill styling. */
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sb__tool-chip:hover {
+  border-color: var(--series-7);
 }
 .sb__tool-chip--in_progress {
   border-style: solid;
@@ -372,13 +373,32 @@
 .sb__tool-chip-tool::before {
   content: "· ";
 }
+/* Real user report: easy to miss while scanning a busy feed — weight +
+   a pulse (same sb-fade animation already used for other live states)
+   instead of a static italic label. */
 .sb__tool-chip-state {
   color: var(--status-warning);
-  font-style: italic;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  animation: sb-fade 1s ease-in-out infinite;
 }
+/* Real user report: long unbroken tokens (case ids, etc.) could overflow
+   past the chip's edge instead of wrapping. Collapsed by default (2 lines)
+   so a long summary doesn't dominate the feed; the chip is a full button —
+   click anywhere on it to see the rest. */
 .sb__tool-chip-summary {
   width: 100%;
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sb__tool-chip--expanded .sb__tool-chip-summary {
+  -webkit-line-clamp: unset;
+  overflow: visible;
 }
 
 /* Real user report: a crash mid-conversation used to wipe everything on
@@ -466,22 +486,67 @@
   background: color-mix(in srgb, var(--status-critical) 12%, var(--page));
 }
 
-/* Phase 5 review document */
-.sb__review {
+/* Phase 5 review document — rendered inline in the chat feed like a shared
+ * file bubble (real user report: a fixed block pinned below the feed ate a
+ * lot of vertical space and blocked chatting past it). Collapsed by default;
+ * the header is a real <button> that expands/collapses the body. */
+.sb__doc-artifact {
+  /* flex: 0 0 auto is load-bearing, not decorative: this is a flex item
+     inside .sb__feed's column layout, and `overflow: hidden` (below, to
+     clip the rounded corners) disables flexbox's "automatic minimum size"
+     protection — without an explicit flex-basis, the item could be
+     flex-shrunk down to a few px tall instead of its real content height. */
   flex: 0 0 auto;
-  border-top: 1px solid var(--border);
-  padding: 10px 12px;
-  max-height: 40vh;
-  overflow-y: auto;
+  align-self: flex-start;
+  width: 100%;
+  max-width: min(96%, 640px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--page);
+  overflow: hidden;
 }
-.sb__review-header {
+.sb__doc-artifact-header {
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 8px;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.sb__review-header h4 {
-  font-size: 14px;
+.sb__doc-artifact-header:hover {
+  background: color-mix(in srgb, var(--series-1) 6%, transparent);
+}
+.sb__doc-artifact-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sb__doc-artifact-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sb__doc-artifact-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sb__doc-artifact-chevron {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.sb__doc-artifact-body {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  max-height: 50vh;
+  overflow-y: auto;
 }
 .sb__review-status {
   font-size: 10.5px;
