@@ -234,3 +234,19 @@ export const NODE_TYPE_ICON: Record<NodeType, string> = {
   benchmark: "▦",
   documentation: "▤",
 };
+
+/** Real uploaded icon files (ui/frontend/public/icons/) — only some node
+ *  types have one yet. Node types absent here keep using NODE_TYPE_ICON's
+ *  glyph above; nothing renders broken while the set is incomplete. */
+export const NODE_TYPE_ICON_IMAGE: Partial<Record<NodeType, string>> = {
+  trigger: "/icons/trigger.png",
+  agent: "/icons/agent.png",
+  patient_twin: "/icons/patient-twin.png",
+  error: "/icons/error.png",
+  complication: "/icons/complication.png",
+  literature_evidence: "/icons/literature-evidence.png",
+  divergence_alert: "/icons/divergence-alert.png",
+  verification_block: "/icons/verification-block.png",
+  model_armor_screen: "/icons/model-armor.png",
+  documentation: "/icons/documentation.png",
+};

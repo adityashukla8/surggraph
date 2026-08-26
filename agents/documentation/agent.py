@@ -35,6 +35,7 @@ from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
 from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, documentation as documentation_slice
+from tools.medgemma_model import fire_shadow_latency_call
 from tools.model_armor import join_note_sections, screen_operative_note
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
@@ -197,6 +198,11 @@ async def draft_note(case_id: str) -> str | None:
     )
 
     prompt = _format_case(slice_context, index)
+    # Real MedGemma-vs-Gemini latency comparison, real user request — shadow
+    # only, fired in the background, never awaited: it must never add to or
+    # break this real drafting step, only observe it. No-op if
+    # MEDGEMMA_ENDPOINT_ID isn't set.
+    fire_shadow_latency_call(f"documentation:{case_id}", prompt)
     draft: OperativeNoteDraft = await run_llm_agent_once(
         AGENT,
         types.Content(role="user", parts=[types.Part(text=prompt)]),

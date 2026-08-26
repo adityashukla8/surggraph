@@ -14,6 +14,7 @@ non-negotiable requirement, not a nice-to-have).
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -37,6 +38,18 @@ from tools.observability import setup_cloud_observability
 
 load_dotenv()
 setup_cloud_observability("surggraph-orchestrator-service")
+
+# Same real bug found and fixed earlier this session in services/surgbot_
+# service/main.py: nothing in this app ever called logging.basicConfig(),
+# so Python's root logger had no handler attached at all — every
+# logger.info() call across the whole pipeline (every agent under agents/,
+# tools/adk_runner.py, tools/medgemma_model.py, ...) was being silently
+# dropped. Root level set to INFO so real logs actually appear; known-noisy
+# third-party loggers turned back down explicitly rather than silencing
+# INFO globally.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+for _noisy_logger in ("httpx", "httpcore", "google", "google.auth", "urllib3", "websockets", "asyncio"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 
 app = FastAPI(title="SurgGraph Orchestrator Service")
 

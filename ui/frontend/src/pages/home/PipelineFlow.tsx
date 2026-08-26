@@ -45,7 +45,7 @@ const AGENTS = [
   { name: "Complication Reasoning", color: "var(--home-red)" },
   { name: "Literature Retrieval", color: "var(--home-accent)" },
   { name: "Corrective Replanning", color: "var(--home-magenta)" },
-  { name: "Divergence Detection", color: "var(--home-violet)" },
+  { name: "Divergence Detection", color: "var(--home-accent-dark)" },
   { name: "Alert Routing", color: "var(--home-yellow)" },
   { name: "Documentation", color: "var(--home-aqua)" },
   { name: "Verification Gate", color: "var(--home-green)" },
@@ -187,7 +187,8 @@ const edges: Edge[] = [
 export function PipelineFlow() {
   const fitViewOptions = useMemo(() => ({ padding: 0.08 }), []);
   return (
-    <div style={{ height: 700, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
+    <div style={{ position: "relative", height: 700, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
+      <span className="home__flow-tag">Powered by Vertex AI + Cloud Run</span>
       <ReactFlow
         nodes={nodes}
         edges={edges}

@@ -20,6 +20,7 @@ and a shared limiter would either over- or under-constrain one of them.
 from __future__ import annotations
 
 import logging
+import time
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import InMemoryRunner
@@ -49,6 +50,7 @@ async def run_llm_agent_once(
     session = await runner.session_service.create_session(app_name=app_name, user_id=app_name)
     final_text: str | None = None
     usage = None
+    start = time.monotonic()
     async for event in runner.run_async(user_id=app_name, session_id=session.id, new_message=content):
         # The real ADK Event carries usage_metadata directly (verified against
         # the installed google-adk 2.6.3: Event.model_fields includes
@@ -61,9 +63,11 @@ async def run_llm_agent_once(
             for part in event.content.parts:
                 if getattr(part, "text", None):
                     final_text = part.text
+    elapsed = time.monotonic() - start
     if final_text is None:
         raise RuntimeError(f"{agent.name} produced no text output")
 
+    logger.info("adk_runner[%s]: gemini call took %.2fs", agent.name, elapsed)
     cached = getattr(usage, "cached_content_token_count", None) if usage else None
     prompt = getattr(usage, "prompt_token_count", None) if usage else None
     total = getattr(usage, "total_token_count", None) if usage else None

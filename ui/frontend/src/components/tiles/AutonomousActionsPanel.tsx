@@ -73,18 +73,6 @@ interface TimelineItem {
   drafting: boolean;
 }
 
-/** Finds the real action_outcome node for an alert or a documentation item,
- *  by walking action_intent -> action_outcome the same way AlertDetail's
- *  expanded view already does. Kept as one shared lookup so the collapsed
- *  row and the expanded detail can never disagree about which write it is. */
-function findResourceUrl(nodes: GraphNodePatch[], intentMatch: (n: GraphNodePatch) => boolean): string | null {
-  const intent = nodes.find((n) => n.node_type === "action_intent" && intentMatch(n));
-  if (!intent) return null;
-  const outcome = nodes.find((n) => n.node_type === "action_outcome" && n.node_id.endsWith(intent.node_id));
-  const url = outcome?.attrs?.resource_url;
-  return typeof url === "string" ? url : null;
-}
-
 const KIND_ICON: Record<ItemKind, string> = {
   proposal: "⇢",
   alert: "⚠",
@@ -93,6 +81,20 @@ const KIND_ICON: Record<ItemKind, string> = {
   model_armor: "⛨",
   fhir_write: "▤",
 };
+
+/** Real uploaded icon files (ui/frontend/public/icons/) — only some kinds
+ *  have one yet. Kinds absent here keep using KIND_ICON's glyph above. */
+const KIND_ICON_IMAGE: Partial<Record<ItemKind, string>> = {
+  alert: "/icons/divergence-alert.png",
+  documentation: "/icons/documentation.png",
+  model_armor: "/icons/model-armor.png",
+  fhir_write: "/icons/documentation.png",
+};
+
+function KindIcon({ kind }: { kind: ItemKind }) {
+  const src = KIND_ICON_IMAGE[kind];
+  return src ? <img className="aa__kind-icon-img" src={src} alt="" /> : <>{KIND_ICON[kind]}</>;
+}
 
 function timeOf(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -162,28 +164,45 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
       });
     }
 
-    // The actual external write an alert produced — real, dedicated item per
-    // agents/alert_routing's own AlertDelivery record (tools/fhir_alert.py:
-    // "DELIVERY FAILURE IS AN OUTCOME, NOT AN EXCEPTION" — a failed delivery
-    // is still a real, visible action_outcome node, not silently absorbed
-    // into the alert it came from). Documentation's own action_outcome
-    // (the operative note's FHIR write) is intentionally NOT duplicated here
-    // — that one stays exactly where it already was, folded into the
-    // documentation item via findResourceUrl below.
+    // The actual external write — real, dedicated item per the underlying
+    // AlertDelivery record (tools/fhir_alert.py: "DELIVERY FAILURE IS AN
+    // OUTCOME, NOT AN EXCEPTION" — a failed delivery is still a real, visible
+    // action_outcome node, never silently absorbed into whatever triggered
+    // it). Covers both real sources of a FHIR write: a divergence alert
+    // (action_intent.attrs.alert_node_id) and an approved operative note
+    // (action_intent.attrs.documentation_node_id) — same real mechanism
+    // either way, so one branch handles both rather than duplicating it.
+    // A real, independent historical record each time — unlike the old
+    // link-lookup-on-the-documentation-item approach, a redraft/re-approval
+    // can never make an EARLIER write here look like it belongs to a LATER
+    // draft, because each is its own item, not a live lookup.
     if (n.node_type === "action_outcome") {
       const intent = nodes.find((x) => x.node_type === "action_intent" && n.node_id.endsWith(x.node_id));
-      if (intent?.attrs?.alert_node_id) {
+      if (intent?.attrs?.alert_node_id || intent?.attrs?.documentation_node_id) {
+        // Real, explicit backend signals (agents/alert_routing/agent.py::
+        // _record_outcome, agents/hitl/approval.py::_write_outcome) — not
+        // inferred from resource_url's presence. Three genuinely different
+        // states, not two: a verification-gate SUPPRESSION is the fail-
+        // closed gate doing its job correctly, not a malfunction, and must
+        // not be worded like one — conflating it with a real delivery
+        // failure would misdescribe the one case where the system is
+        // working exactly as designed.
+        const delivered = Boolean(a.delivered);
+        const blocked = Boolean(a.blocked);
         const url = a.resource_url;
-        const delivered = typeof url === "string" && url.length > 0;
         items.push({
           id: n.node_id,
           kind: "fhir_write",
           at: n.timestamp,
+          // Both a suppression and a genuine failure are worth a surgeon's
+          // eye — neither should read as "all clear" — but only a real
+          // failure is a malfunction; that distinction lives in `outcome`'s
+          // wording, not in severity.
           severity: delivered ? "low" : "high",
-          summary: `Wrote to FHIR · ${n.label}`,
-          outcome: delivered ? "Filed" : "Delivery failed",
+          summary: n.label, // backend already picked the exact right phrasing for the real outcome — one source of truth, not a re-derived string
+          outcome: delivered ? "Filed" : blocked ? "Suppressed by verification gate" : "Delivery failed",
           node: n,
-          resourceUrl: delivered ? (url as string) : null,
+          resourceUrl: delivered && typeof url === "string" && url.length > 0 ? url : null,
           drafting: false,
         });
       }
@@ -225,12 +244,10 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
               ? "Approved — filed to FHIR"
               : "Rejected — nothing written",
         node: n,
-        // Never surfaced while drafting: the node_id is stable across a
-        // case's whole lifetime, so a still-drafting note would otherwise
-        // inherit a PRIOR draft's real resource_url via the same
-        // documentation_node_id match — a stale link on unreviewed content,
-        // caught live while testing the drafting-status write above.
-        resourceUrl: drafting ? null : findResourceUrl(nodes, (x) => x.attrs?.documentation_node_id === n.node_id),
+        // The real write itself is now its own dedicated "fhir_write" item
+        // (see the action_outcome branch above) rather than a link looked
+        // up and attached here.
+        resourceUrl: null,
         drafting,
       });
     }
@@ -303,7 +320,7 @@ function attentionState(items: TimelineItem[]) {
   // A failed real-world delivery must never quietly blend into "all clear" —
   // tools/fhir_alert.py's own principle: "delivery failure is an outcome,
   // not an exception."
-  if (failedFhirWrites.length) return { tone: "high" as const, text: "FHIR write failed", count: failedFhirWrites.length };
+  if (failedFhirWrites.length) return { tone: "high" as const, text: "FHIR write needs attention", count: failedFhirWrites.length };
   if (pendingDocs.length) return { tone: "doc" as const, text: "Documentation awaiting review", count: pendingDocs.length };
   if (pendingProposals.length)
     return {
@@ -373,7 +390,7 @@ function Citations({
               <>
                 {" · "}
                 <a href={String(c.attrs.url)} target="_blank" rel="noreferrer">
-                  source ▤
+                  source <img className="aa__kind-icon-img" src="/icons/literature-evidence.png" alt="" />
                 </a>
               </>
             ) : null}
@@ -489,7 +506,7 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                       <span className="aa__row-tags">
                         <span className="aa__time">{timeOf(item.at)}</span>
                         <span className={`aa__tag aa__tag--${item.kind}`}>
-                          {KIND_ICON[item.kind]} {KIND_LABEL[item.kind]}
+                          <KindIcon kind={item.kind} /> {KIND_LABEL[item.kind]}
                         </span>
                         <span className={`aa__sev aa__sev--${item.severity}`}>{item.severity}</span>
                         <span className="aa__chevron">{open ? "▾" : "▸"}</span>
@@ -550,7 +567,7 @@ export function AutonomousActionsPanel({ caseId, nodes, edges }: Props) {
                           aria-label="Open the real FHIR record"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          ▤
+                          <img className="aa__kind-icon-img" src="/icons/documentation.png" alt="" />
                         </a>
                       </span>
                     )}
@@ -788,17 +805,9 @@ function DocumentationDetail({
       )}
 
       {item.outcome ? (
-        <div className="aa__resolved-note">
-          {item.outcome}
-          {item.resourceUrl ? (
-            <>
-              {" · "}
-              <a href={item.resourceUrl} target="_blank" rel="noreferrer">
-                open record ▤
-              </a>
-            </>
-          ) : null}
-        </div>
+        // The real write itself (if approval led to one) is its own
+        // dedicated "fhir_write" timeline item now, not a link here.
+        <div className="aa__resolved-note">{item.outcome}</div>
       ) : (
         <div className="aa__actions">
           {!blockedByArmor && (
@@ -846,21 +855,24 @@ function ModelArmorDetail({ item }: { item: TimelineItem }) {
  *  dedicated item rather than a link folded into that alert's row. */
 function FhirWriteDetail({ item, nodes }: { item: TimelineItem; nodes: GraphNodePatch[] }) {
   const intent = nodes.find((n) => n.node_type === "action_intent" && item.node.node_id.endsWith(n.node_id));
-  const alert = nodes.find((n) => n.node_id === intent?.attrs?.alert_node_id);
+  // Either real source of a write: a divergence alert, or an approved
+  // operative note — whichever attr the intent actually carries.
+  const sourceId = intent?.attrs?.alert_node_id ?? intent?.attrs?.documentation_node_id;
+  const source = nodes.find((n) => n.node_id === sourceId);
 
   return (
     <>
       <ShowNodeInGraph nodeId={item.node.node_id} />
       <p className="aa__framing">{item.node.label}</p>
-      {alert && (
+      {source && (
         <div className="aa__trail">
-          Delivered for: <GraphLink nodeId={alert.node_id}>{alert.label}</GraphLink>
+          Delivered for: <GraphLink nodeId={source.node_id}>{source.label}</GraphLink>
         </div>
       )}
       {item.resourceUrl ? (
         <div className="aa__autonomous">
           <a href={item.resourceUrl} target="_blank" rel="noreferrer">
-            open record ▤
+            open record <img className="aa__kind-icon-img" src="/icons/documentation.png" alt="" />
           </a>
         </div>
       ) : (

@@ -11,7 +11,7 @@ export function Hero() {
             <span className="home__hero-headline-accent">Autonomous Surgical Safety System</span> 
           </h1>
           <h2>Improving Patient
-            Outcomes and Surgeon Efficiency
+            Outcomes and Surgeon Efficiency by Detecting Surgical Errors & Complications
           </h2>
           <br></br>
 

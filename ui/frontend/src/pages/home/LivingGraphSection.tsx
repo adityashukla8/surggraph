@@ -7,10 +7,10 @@ const STATS = [
 
 export function LivingGraphSection() {
   return (
-    <section className="home__section">
+    <section className="home__section" id="state">
       <div className="home__living-graph">
         <div>
-          <span className="home__eyebrow">The Living Graph</span>
+          <span className="home__eyebrow">The Living Graph - Powered by Firestore</span>
           <h2 className="home__headline">Real-time surgical context layer for all agents</h2>
           <p className="home__living-graph-body">
             Every activity, entity, interaction, error, complication, corrective proposal, alert, and verification

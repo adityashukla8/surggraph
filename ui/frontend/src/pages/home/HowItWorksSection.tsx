@@ -20,7 +20,7 @@ const STEPS: StepCard[] = [
   },
   {
     num: "02",
-    color: "var(--home-violet)",
+    color: "var(--home-accent-dark)",
     label: "Reason",
     title: "Complication Reasoning + Literature + Replanning",
     desc: "Detected error → reasoned complication → literature-backed → bounded corrective proposal.",
@@ -53,6 +53,7 @@ export function HowItWorksSection() {
           Perceive. Reason. Act. Verify.
         </h2>
       </div>
+      <p className="home__hiw-subheading">Core TaskMaster Track Submission</p>
 
       <div className="home__pipeline-card">
         <div>
@@ -74,7 +75,6 @@ export function HowItWorksSection() {
           <div
             className="home__step-card"
             key={s.num}
-            id={s.label === "Verify" ? "safety" : undefined}
             style={{ ["--step-color" as string]: s.color, scrollMarginTop: 90 }}
           >
             <span className="home__step-num">{s.num} · {s.label}</span>

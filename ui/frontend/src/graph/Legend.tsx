@@ -1,5 +1,14 @@
 import type { EdgeKind, NodeType } from "./types";
-import { NODE_TYPE_ICON, NODE_TYPE_LABEL, EDGE_KIND_COLOR, CONFIRMATION_STATUS_COLOR, agentColorVar, nodeKindColorVar, nodeKindOutlineStyle } from "./palette";
+import {
+  NODE_TYPE_ICON,
+  NODE_TYPE_ICON_IMAGE,
+  NODE_TYPE_LABEL,
+  EDGE_KIND_COLOR,
+  CONFIRMATION_STATUS_COLOR,
+  agentColorVar,
+  nodeKindColorVar,
+  nodeKindOutlineStyle,
+} from "./palette";
 
 // A factually accurate reference for the real encoding in nodeTypes.tsx /
 // edgeTypes.tsx / palette.ts. Colors, icons, dash patterns and stroke widths
@@ -114,8 +123,12 @@ export function GraphLegend() {
             <div className="graph-legend__heading">{group.heading}</div>
             {group.rows.map((row) => (
               <div className="graph-legend__row" key={row.kind}>
-                {/* Outline = node kind, icon glyph = the kind's shape. Both
-                    read straight from palette.ts, same as the real nodes. */}
+                {/* Outline = node kind, icon = the kind's shape. Both read
+                    straight from palette.ts, same as the real nodes — a
+                    real uploaded icon here when one exists (masked with a
+                    plain neutral tint, not an agent color: unlike a node on
+                    the canvas, this row isn't any one real agent's output),
+                    the same glyph fallback otherwise. */}
                 <span
                   className="graph-legend__node-swatch"
                   style={{
@@ -123,7 +136,14 @@ export function GraphLegend() {
                     borderStyle: nodeKindOutlineStyle(row.kind),
                   }}
                 >
-                  {NODE_TYPE_ICON[row.kind]}
+                  {NODE_TYPE_ICON_IMAGE[row.kind] ? (
+                    <span
+                      className="graph-legend__node-icon-img"
+                      style={{ maskImage: `url(${NODE_TYPE_ICON_IMAGE[row.kind]})`, WebkitMaskImage: `url(${NODE_TYPE_ICON_IMAGE[row.kind]})` }}
+                    />
+                  ) : (
+                    NODE_TYPE_ICON[row.kind]
+                  )}
                 </span>
                 <span>
                   {/* The same string the node's own tag shows, so a viewer can

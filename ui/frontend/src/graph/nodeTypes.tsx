@@ -7,6 +7,7 @@ import {
   nodeKindColorVar,
   nodeKindOutlineStyle,
   NODE_TYPE_ICON,
+  NODE_TYPE_ICON_IMAGE,
   NODE_TYPE_LABEL,
   CONFIRMATION_STATUS_COLOR,
 } from "./palette";
@@ -38,9 +39,27 @@ function CaseNode({ data }: NodeProps<CaseFlowNode>) {
     >
       <Handle type="target" position={Position.Left} style={{ background: kindColor }} />
       <div className="case-node__row">
-        <span className="case-node__icon" style={{ color: agentColor }}>
-          {NODE_TYPE_ICON[data.nodeType] ?? "●"}
-        </span>
+        {NODE_TYPE_ICON_IMAGE[data.nodeType] ? (
+          // A real uploaded icon, masked (not a plain <img>) so it can still
+          // be recolored — real user report: the per-agent tint these
+          // started with read too faint/washed out to see clearly. Flat,
+          // high-contrast, theme-aware (var(--text-primary): near-black in
+          // light mode, white in dark mode, so it never vanishes against a
+          // dark background) instead of the agent color the glyph it
+          // replaced used to carry.
+          <span
+            className="case-node__icon case-node__icon-img"
+            style={{
+              backgroundColor: "var(--text-primary)",
+              maskImage: `url(${NODE_TYPE_ICON_IMAGE[data.nodeType]})`,
+              WebkitMaskImage: `url(${NODE_TYPE_ICON_IMAGE[data.nodeType]})`,
+            }}
+          />
+        ) : (
+          <span className="case-node__icon" style={{ color: agentColor }}>
+            {NODE_TYPE_ICON[data.nodeType] ?? "●"}
+          </span>
+        )}
         {/* Label is NOT truncated: plan_v2 §4.1 specifies fixed height with
             length growing to fit the text, and neighbors repositioning around
             it. layout.ts measures the real rendered width and feeds it to

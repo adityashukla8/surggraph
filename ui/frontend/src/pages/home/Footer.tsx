@@ -8,6 +8,10 @@ export function Footer() {
             Source
           </a>
           {" · "}
+          <a href="https://www.linkedin.com/in/adityashukla8" target="_blank" rel="noreferrer">
+            LinkedIn
+          </a>
+          {" · "}
           Synthetic patient data · Not a clinical device
         </span>
       </div>

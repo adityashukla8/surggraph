@@ -138,6 +138,15 @@
   letter-spacing: -0.2px;
 }
 
+.dashboard__title-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.dashboard__title-link:hover {
+  text-decoration: underline;
+}
+
 .dashboard__track-label {
   font-size: 12px;
   font-weight: 400;
@@ -451,6 +460,18 @@
   flex-shrink: 0;
 }
 
+.case-node__icon-img {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
 .case-node__label {
   font-size: 12px;
   font-weight: 500;
@@ -573,15 +594,28 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 14px;
+  width: 20px;
+  height: 16px;
   flex-shrink: 0;
   border-width: 1.5px;
   border-radius: 3px;
   background: var(--surface-1);
-  font-size: 9px;
+  font-size: 10.5px;
   line-height: 1;
   color: var(--text-secondary);
+}
+
+.graph-legend__node-icon-img {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background-color: var(--text-secondary);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
 }
 
 .graph-legend__swatch {
@@ -926,6 +960,16 @@
   white-space: nowrap;
   border: 1px solid transparent;
   color: var(--text-primary);
+}
+
+/* Real uploaded icons (ui/frontend/public/icons/) standing in for a glyph —
+ * sized and aligned to sit inline with the text around it the same way the
+ * character it replaced did. */
+.aa__kind-icon-img {
+  width: 10px;
+  height: 10px;
+  vertical-align: -1px;
+  object-fit: contain;
 }
 .aa__tag--proposal      { background: color-mix(in srgb, var(--series-4) 22%, var(--surface-1)); border-color: color-mix(in srgb, var(--series-4) 40%, transparent); color: var(--text-primary); }
 .aa__tag--alert         { background: color-mix(in srgb, var(--series-8) 20%, var(--surface-1)); border-color: color-mix(in srgb, var(--series-8) 40%, transparent); color: var(--text-primary); }

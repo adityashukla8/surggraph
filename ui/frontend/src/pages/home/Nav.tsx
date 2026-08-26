@@ -2,9 +2,10 @@ import { Link } from "react-router-dom";
 
 const LINKS = [
   { href: "#problem", label: "Problem" },
-  { href: "#how-it-works", label: "How It Works" },
+  { href: "#how-it-works", label: "TaskMaster Solution" },
   { href: "#agents", label: "Agents" },
-  { href: "#safety", label: "Safety" },
+  { href: "#state", label: "State" },
+  { href: "#surgbot", label: "SurgBot" },
   { href: "#tech", label: "Tech" },
 ];
 
@@ -32,10 +33,10 @@ export function Nav() {
             {l.label}
           </a>
         ))}
-        <Link to="/console" className="home__btn home__btn--primary">
-          Launch Case
-        </Link>
       </div>
+      <Link to="/console" className="home__nav-cta home__btn home__btn--primary">
+        Launch Case
+      </Link>
     </nav>
   );
 }

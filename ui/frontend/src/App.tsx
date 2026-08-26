@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import { Link } from "react-router-dom";
 import "./App.css";
 import { VideoPanel } from "./components/tiles/VideoPanel";
 import { StateGraphPanel } from "./components/tiles/StateGraphPanel";
@@ -60,7 +61,7 @@ function App() {
 
   const [splitPct, setSplitPct] = useState(DEFAULT_SPLIT_PCT);
   const [surgGraphCollapsed, setSurgGraphCollapsed] = useState(false);
-  const [surgBotCollapsed, setSurgBotCollapsed] = useState(false);
+  const [surgBotCollapsed, setSurgBotCollapsed] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
 
@@ -133,7 +134,11 @@ function App() {
             <header className="dashboard__header">
               <div className="dashboard__title-block">
                 <div className="dashboard__title-row">
-                  <h1>SurgGraph</h1>
+                  <h1>
+                    <Link to="/" className="dashboard__title-link" title="Back to the SurgGraph homepage">
+                      SurgGraph
+                    </Link>
+                  </h1>
                   <span className="dashboard__track-label">TaskMaster Track</span>
                 </div>
                 <p className="dashboard__tagline">
