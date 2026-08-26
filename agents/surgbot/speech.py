@@ -46,8 +46,12 @@ nothing) — that's a real, honest empty result, not a failure.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import queue
+import re
+from collections.abc import AsyncIterator, Iterator
 
 from dotenv import load_dotenv
 from google.api_core.client_options import ClientOptions
@@ -175,3 +179,207 @@ def synthesize_speech(text: str, voice_name: str = TTS_VOICE) -> bytes:
 
         span.set_attribute("tts.audio_bytes", len(response.audio_content))
         return response.audio_content
+
+
+# --- Streaming variants (real latency win, plan_v2 §16) ------------------------
+#
+# The one-shot functions above wait for a COMPLETE input (the whole held
+# clip, or the whole LLM reply) before doing any work — measured this
+# session: 2-11s for STT on a few seconds of speech, 2.6-2.8s for TTS on a
+# short reply (proportionally longer for the 500-700+ char replies real
+# conversations produce). Neither number is really "STT/TTS is slow" so
+# much as "we throw away the free latency-hiding a stream gives us." These
+# streaming variants restructure ONLY the speech I/O transport — how audio
+# gets to/from Google's APIs — not anything about what the agent does.
+#
+# STT: real Cloud Speech-to-Text v2 StreamingRecognize (bidi gRPC) — the
+# caller pushes audio chunks in AS THE REVIEWER IS STILL TALKING, so most
+# of the recognition work overlaps their own hold duration; by the time
+# they release, only a short tail remains to process. AudioEncoding.LINEAR16
+# (used by the one-shot Recognize call above) is accepted here too — the
+# streaming path's real constraint is different (see TTS below, which does
+# reject LINEAR16 for streaming — confirmed empirically, not assumed).
+#
+# TTS: real Cloud Text-to-Speech streaming_synthesize, sentence-chunked —
+# same technique as Google's own official sample (GoogleCloudPlatform/
+# generative-ai's Chirp 3 HD getting-started notebook, read directly this
+# session). Real, empirically confirmed difference from the one-shot call:
+# streaming_synthesize returns RAW PCM chunks with NO WAV header (the
+# one-shot synthesize_speech's audio_content IS a full WAV file — these are
+# genuinely different response shapes, not a smaller version of the same
+# thing) and REJECTS AudioEncoding.LINEAR16 outright ("400 Unsupported audio
+# encoding" — a real error hit and diagnosed this session); the correct
+# streaming encoding is AudioEncoding.PCM. Measured this session: first
+# audio chunk in ~0.6s vs. 2.6s+ for the whole clip via the one-shot call.
+
+
+def _stt_streaming_requests(
+    audio_queue: "queue.Queue[bytes | None]", sample_rate_hz: int
+) -> Iterator[cloud_speech.StreamingRecognizeRequest]:
+    config = cloud_speech.StreamingRecognitionConfig(
+        config=cloud_speech.RecognitionConfig(
+            explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=sample_rate_hz,
+                audio_channel_count=1,
+            ),
+            language_codes=[SPEECH_LANGUAGE_CODE],
+            model="chirp_3",
+        ),
+        # No VAD/endpointing here on purpose: push-to-talk already owns turn
+        # boundaries (the reviewer's own press/release) — auto-endpointing
+        # would risk finalizing early on a mid-thought pause. interim_results
+        # stays False; only real, stable final segments are collected.
+        streaming_features=cloud_speech.StreamingRecognitionFeatures(interim_results=False),
+    )
+    yield cloud_speech.StreamingRecognizeRequest(recognizer=_RECOGNIZER, streaming_config=config)
+    while True:
+        chunk = audio_queue.get()
+        if chunk is None:
+            return
+        yield cloud_speech.StreamingRecognizeRequest(audio=chunk)
+
+
+def _transcribe_streaming_worker(audio_queue: "queue.Queue[bytes | None]", sample_rate_hz: int) -> str:
+    """Drives SpeechClient.streaming_recognize — a blocking, synchronous
+    bidi-streaming gRPC call — to completion. Must run in its own thread
+    (asyncio.to_thread); see StreamingTranscription below for the async
+    wrapper callers actually use."""
+    with _tracer.start_as_current_span("stt.streaming_recognize") as span:
+        span.set_attribute("stt.model", "chirp_3")
+        span.set_attribute("stt.region", SPEECH_REGION)
+        transcript_parts: list[str] = []
+        try:
+            for response in _get_speech_client().streaming_recognize(
+                requests=_stt_streaming_requests(audio_queue, sample_rate_hz)
+            ):
+                for result in response.results:
+                    if result.is_final and result.alternatives:
+                        transcript_parts.append(result.alternatives[0].transcript)
+        except GoogleAPIError as exc:
+            logger.exception("surgbot speech: streaming_recognize call failed")
+            span.record_exception(exc)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, f"streaming_recognize failed: {exc}"))
+            raise
+        transcript = " ".join(p for p in transcript_parts if p).strip()
+        span.set_attribute("stt.transcript_length", len(transcript))
+        return transcript
+
+
+class StreamingTranscription:
+    """A live streaming Speech-to-Text turn: start() once (typically on
+    mic_start), push_audio() for each captured chunk while the reviewer
+    holds the button, finish() once (on mic_stop) to get the transcript.
+    The real recognize call runs on a background thread the whole time —
+    by the time finish() is awaited, most of the audio has usually already
+    been processed, so the remaining wait is typically short, not the full
+    STT latency of a one-shot call on the same clip."""
+
+    def __init__(self, sample_rate_hz: int = 16000) -> None:
+        self._queue: "queue.Queue[bytes | None]" = queue.Queue()
+        self._sample_rate_hz = sample_rate_hz
+        self._task: asyncio.Task[str] | None = None
+        self.bytes_pushed = 0
+
+    def start(self) -> None:
+        self._task = asyncio.create_task(
+            asyncio.to_thread(_transcribe_streaming_worker, self._queue, self._sample_rate_hz)
+        )
+
+    def push_audio(self, chunk: bytes) -> None:
+        if chunk:
+            self.bytes_pushed += len(chunk)
+            self._queue.put(chunk)
+
+    async def finish(self) -> str:
+        """Signals end-of-audio and awaits the real transcript. Returns ""
+        if start() was never called (no turn in progress) — never raises
+        for that case, since it's a caller-sequencing question, not a
+        transcription failure."""
+        if self._task is None:
+            return ""
+        self._queue.put(None)  # sentinel: no more audio, finalize
+        return await self._task
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$")
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Splits text into sentence-ish chunks for streaming TTS — same real
+    technique as Google's own Chirp 3 HD streaming sample (text_generator
+    in the notebook cited above), adapted to return a list. Never sends a
+    chunk smaller than a real clause: Cloud TTS's own streaming guidance is
+    that a too-small first chunk starves the model of the context it needs
+    for natural rhythm/inflection."""
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.findall(text) if s.strip()]
+    return sentences or ([text.strip()] if text.strip() else [])
+
+
+def _synthesize_streaming_worker(text: str, voice_name: str, chunk_queue: "queue.Queue[bytes | None]") -> None:
+    """Drives texttospeech.streaming_synthesize — a blocking, synchronous
+    bidi-streaming gRPC call — pushing each raw PCM audio chunk into
+    chunk_queue as it's produced, ending with a None sentinel. Must run in
+    its own thread; see synthesize_speech_streaming below for the async
+    wrapper callers actually use."""
+    voice = texttospeech.VoiceSelectionParams(
+        name=f"{SPEECH_LANGUAGE_CODE}-Chirp3-HD-{voice_name}",
+        language_code=SPEECH_LANGUAGE_CODE,
+    )
+    config_request = texttospeech.StreamingSynthesizeRequest(
+        streaming_config=texttospeech.StreamingSynthesizeConfig(
+            voice=voice,
+            # PCM, not LINEAR16 — streaming_synthesize rejects LINEAR16
+            # outright (confirmed empirically this session: a real 400
+            # "Unsupported audio encoding" error). Same TTS_SAMPLE_RATE_HZ
+            # as the one-shot call for a consistent, known output rate.
+            streaming_audio_config=texttospeech.StreamingAudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.PCM,
+                sample_rate_hertz=TTS_SAMPLE_RATE_HZ,
+            ),
+        )
+    )
+
+    def request_generator() -> Iterator[texttospeech.StreamingSynthesizeRequest]:
+        yield config_request
+        for sentence in _split_into_sentences(text):
+            yield texttospeech.StreamingSynthesizeRequest(input=texttospeech.StreamingSynthesisInput(text=sentence))
+
+    try:
+        for response in _get_tts_client().streaming_synthesize(request_generator()):
+            if response.audio_content:
+                chunk_queue.put(response.audio_content)
+    finally:
+        chunk_queue.put(None)
+
+
+async def synthesize_speech_streaming(text: str, voice_name: str = TTS_VOICE) -> AsyncIterator[bytes]:
+    """Streams synthesized audio as a sequence of raw PCM16 chunks (roughly
+    one per sentence) instead of returning one complete WAV — real latency
+    win for long replies: the FIRST chunk is typically ready in well under
+    a second (measured this session: ~0.6s), and playback of it can start
+    immediately while later sentences are still being synthesized, instead
+    of waiting for the entire reply. Each chunk is raw PCM16 @
+    TTS_SAMPLE_RATE_HZ mono, NOT a WAV file — callers must decode/play it
+    accordingly (contrast with synthesize_speech's WAV output above)."""
+    if not text.strip():
+        raise ValueError("synthesize_speech_streaming: text must be non-empty")
+
+    with _tracer.start_as_current_span("tts.streaming_synthesize") as span:
+        span.set_attribute("tts.voice", voice_name)
+        span.set_attribute("tts.text_length", len(text))
+        chunk_queue: "queue.Queue[bytes | None]" = queue.Queue()
+        worker_task = asyncio.create_task(
+            asyncio.to_thread(_synthesize_streaming_worker, text, voice_name, chunk_queue)
+        )
+        total_bytes = 0
+        try:
+            while True:
+                chunk = await asyncio.to_thread(chunk_queue.get)
+                if chunk is None:
+                    break
+                total_bytes += len(chunk)
+                yield chunk
+        finally:
+            span.set_attribute("tts.audio_bytes", total_bytes)
+            await worker_task

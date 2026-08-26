@@ -54,15 +54,28 @@ async def main() -> None:
         await ws.send(json.dumps({"type": "session_start", "case_ids": [], "reviewer_id": "stt-llm-tts-test"}))
         print("session_start sent")
 
-        print("\n>>> sending mic_start + real audio + mic_stop")
+        print("\n>>> sending mic_start + real audio (paced to match real capture speed) + mic_stop")
+        t_start = asyncio.get_event_loop().time()
         await ws.send(json.dumps({"type": "mic_start"}))
-        # Send in reasonably sized chunks, like the browser's worklet would.
-        chunk_size = 3200  # 100ms @ 16kHz mono PCM16 -- irrelevant here since
-        # this clip is 24kHz, but chunking exercises the same accumulation
-        # path the real worklet uses.
+        # Paced to real wall-clock duration, matching how the real
+        # AudioWorklet delivers captured mic audio as the reviewer speaks
+        # (plan_v2 §16 depends on this overlap — sending the whole clip as
+        # fast as possible defeats the point of streaming and would give a
+        # misleadingly pessimistic latency reading).
+        chunk_ms = 100
+        chunk_size = int(chunk_ms / 1000 * rate) * 2  # 2 bytes/sample, mono
         for i in range(0, len(pcm), chunk_size):
             await ws.send(pcm[i : i + chunk_size])
+            await asyncio.sleep(chunk_ms / 1000)
+        t_audio_sent = asyncio.get_event_loop().time() - t_start
         await ws.send(json.dumps({"type": "mic_stop"}))
+        print(f"    (real clip duration paced over {t_audio_sent:.2f}s, then mic_stop)")
+
+        t_mic_stop = asyncio.get_event_loop().time()
+        t_stt_done = None
+        t_model_text_done = None
+        t_first_audio = None
+        t_tts_done = None
 
         end = asyncio.get_event_loop().time() + 30.0
         while asyncio.get_event_loop().time() < end:
@@ -73,6 +86,8 @@ async def main() -> None:
                 break
 
             if isinstance(msg, (bytes, bytearray)):
+                if t_first_audio is None:
+                    t_first_audio = asyncio.get_event_loop().time()
                 saw_audio_bytes += len(msg)
                 print(f"EVENT: <binary audio frame, {len(msg)} bytes>")
                 continue
@@ -82,24 +97,35 @@ async def main() -> None:
 
             if parsed.get("type") == "tool_call_started" and parsed.get("tool_name") == "transcribe_audio":
                 saw_stt_started = True
-            if parsed.get("type") == "tool_call_finished" and "summary" in parsed and not saw_tool_call:
-                # First finished call after STT is transcribe_audio's own —
-                # capture its transcript from the summary field.
-                pass
             if parsed.get("type") == "transcript_delta" and parsed.get("speaker") == "user":
                 saw_stt_finished_transcript = parsed.get("text", "")
+                t_stt_done = asyncio.get_event_loop().time()
             if parsed.get("type") == "tool_call_started" and parsed.get("tool_name") not in ("transcribe_audio", "synthesize_speech"):
                 saw_tool_call = True
             if parsed.get("type") == "transcript_delta" and parsed.get("speaker") == "model":
                 saw_model_transcript = parsed.get("text", "")
+                t_model_text_done = asyncio.get_event_loop().time()
             if parsed.get("type") == "tool_call_started" and parsed.get("tool_name") == "synthesize_speech":
                 saw_tts_started = True
             if parsed.get("type") == "tool_call_finished" and parsed.get("call_id") and saw_tts_started and not saw_tts_finished:
                 saw_tts_finished = True
+                t_tts_done = asyncio.get_event_loop().time()
             if parsed.get("type") == "error":
                 print("!! ERROR:", parsed.get("detail"))
 
         await ws.send(json.dumps({"type": "end_session"}))
+
+    print("\n=== LATENCY BREAKDOWN (from mic_stop) ===")
+    if t_stt_done:
+        print(f"STT tail wait (mic_stop -> transcript): {t_stt_done - t_mic_stop:.2f}s")
+    if t_model_text_done and t_stt_done:
+        print(f"LLM (+ tool calls):                     {t_model_text_done - t_stt_done:.2f}s")
+    if t_first_audio and t_model_text_done:
+        print(f"Time to FIRST audio chunk after reply:  {t_first_audio - t_model_text_done:.2f}s")
+    if t_tts_done and t_model_text_done:
+        print(f"Total TTS streaming time:               {t_tts_done - t_model_text_done:.2f}s")
+    if t_tts_done:
+        print(f"TOTAL (mic_stop -> all audio sent):     {t_tts_done - t_mic_stop:.2f}s")
 
     print("\n=== RESULTS ===")
     print(f"STT started:           {saw_stt_started}")

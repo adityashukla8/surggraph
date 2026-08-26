@@ -14,14 +14,22 @@
 // calls so the resample is continuous across block boundaries rather than
 // re-basing (and audibly clicking) every ~2.7ms render quantum.
 //
-// Playback is a single decoded clip per turn, not a continuous stream —
-// the old chunk-streaming PcmPlayer (queueing PCM16 fragments back-to-back
-// against a running cursor) no longer applies now that the server sends one
-// complete synthesized WAV per reply instead of a live audio stream. See
-// playAudioClip() below.
+// Playback streams raw PCM16 chunks (plan_v2 §16 — one chunk roughly per
+// sentence, sent as soon as each is synthesized instead of waiting for the
+// whole reply) and schedules them back-to-back against a running cursor —
+// see PcmChunkPlayer below. Each chunk is real, headerless PCM16 straight
+// off Cloud Text-to-Speech's streaming_synthesize (confirmed empirically
+// this session: streaming output has no WAV header, unlike the one-shot
+// synthesize_speech call, and rejects LINEAR16 — PCM only), so this does
+// NOT go through AudioContext.decodeAudioData (that needs a real container
+// format) — it builds an AudioBuffer directly from the raw samples.
 
 export const MIC_WORKLET_NAME = "surgbot-mic-processor";
 export const PCM_SAMPLE_RATE = 16000; // mic capture / Cloud Speech-to-Text input rate
+// Must match agents/surgbot/speech.py::TTS_SAMPLE_RATE_HZ — the server
+// picks this, the client just has to know it to build correct AudioBuffers
+// from raw samples (no sample-rate field travels with each chunk).
+export const PCM_OUTPUT_SAMPLE_RATE = 24000;
 
 const MIC_PROCESSOR_SOURCE = `
 class SurgBotMicProcessor extends AudioWorkletProcessor {
@@ -84,54 +92,84 @@ export function getMicWorkletBlobUrl(): string {
   return cachedBlobUrl;
 }
 
-export interface AudioClipHandle {
-  /** Stops playback immediately if still in progress (e.g. ending the
-   *  session mid-reply) — safe to call even after the clip already
-   *  finished on its own. */
-  stop(): void;
-}
+/** Schedules incoming raw PCM16 chunks back-to-back against a running
+ *  cursor so streamed playback is continuous even though chunks arrive one
+ *  per sentence, separated by real synthesis + network time. Fires
+ *  onDrained once BOTH markComplete() has been called (the server signals
+ *  no more chunks are coming for this turn — see useSurgBotVoice.ts's
+ *  tool_call_finished handling for "synthesize_speech") AND every enqueued
+ *  chunk has finished playing — never on either condition alone, so a
+ *  caller can't mistake "we're between chunks" for "the reply is over." */
+export class PcmChunkPlayer {
+  private ctx: AudioContext;
+  private sampleRate: number;
+  private nextStartTime = 0;
+  private activeSources = new Set<AudioBufferSourceNode>();
+  private closed = false;
+  private onDrained?: () => void;
 
-/** Decodes and plays ONE complete synthesized reply clip (plan_v2 §15 — the
- *  server now sends one full WAV per turn via Cloud Text-to-Speech, not a
- *  continuous stream of PCM16 fragments, so there's no scheduling cursor to
- *  maintain). decodeAudioData handles the real container format (WAV,
- *  confirmed empirically against agents/surgbot/speech.py's actual output —
- *  see tests/test_surgbot_speech.py) without this file needing to know the
- *  exact byte layout. */
-export function playAudioClip(ctx: AudioContext, data: ArrayBuffer, onEnded?: () => void): AudioClipHandle {
-  let source: AudioBufferSourceNode | null = null;
-  let stopped = false;
+  constructor(ctx: AudioContext, sampleRate: number = PCM_OUTPUT_SAMPLE_RATE, onDrained?: () => void) {
+    this.ctx = ctx;
+    this.sampleRate = sampleRate;
+    this.onDrained = onDrained;
+  }
 
-  ctx
-    .decodeAudioData(data.slice(0))
-    .then((buffer) => {
-      if (stopped) return;
-      source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.onended = () => {
-        source = null;
-        onEnded?.();
-      };
-      source.start();
-    })
-    .catch(() => {
-      // Undecodable clip — treat playback as immediately ended rather than
-      // leaving the caller's "SurgBot is speaking" state stuck forever.
-      onEnded?.();
-    });
+  enqueue(pcm16: ArrayBuffer): void {
+    if (pcm16.byteLength === 0) return;
+    const int16 = new Int16Array(pcm16);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+      const v = int16[i];
+      float32[i] = v < 0 ? v / 0x8000 : v / 0x7fff;
+    }
 
-  return {
-    stop(): void {
-      stopped = true;
-      if (source) {
-        try {
-          source.stop();
-        } catch {
-          // Already stopped/ended — nothing to do.
-        }
-        source = null;
+    const buffer = this.ctx.createBuffer(1, float32.length, this.sampleRate);
+    buffer.copyToChannel(float32, 0);
+
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.ctx.destination);
+
+    const now = this.ctx.currentTime;
+    const startAt = Math.max(now, this.nextStartTime);
+    source.start(startAt);
+    this.nextStartTime = startAt + buffer.duration;
+
+    this.activeSources.add(source);
+    source.onended = () => {
+      this.activeSources.delete(source);
+      this.maybeFireDrained();
+    };
+  }
+
+  /** Signals no more chunks are coming for this turn — combined with the
+   *  active-source count to decide when onDrained actually fires. */
+  markComplete(): void {
+    this.closed = true;
+    this.maybeFireDrained();
+  }
+
+  private maybeFireDrained(): void {
+    if (this.closed && this.activeSources.size === 0) this.onDrained?.();
+  }
+
+  /** Stops everything immediately and resets the schedule cursor — used
+   *  when a session ends or a new turn starts, so stale audio from a
+   *  torn-down turn never keeps playing into the next one. */
+  stop(): void {
+    this.closed = true;
+    for (const source of this.activeSources) {
+      try {
+        source.stop();
+      } catch {
+        // Already stopped/ended — nothing to do.
       }
-    },
-  };
+    }
+    this.activeSources.clear();
+    this.nextStartTime = 0;
+  }
+
+  get isPlaying(): boolean {
+    return this.activeSources.size > 0;
+  }
 }

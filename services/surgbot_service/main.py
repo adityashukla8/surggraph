@@ -41,6 +41,18 @@ conversation history forward automatically (confirmed via a real source
 read of vertexai/agent_engines/templates/adk.py::AdkApp.async_stream_query
 this session). This replaces the old Live-only "carried-forward running
 summary across a bidi reconnect" workaround, which is no longer needed.
+
+LATENCY (plan_v2 §16, real measurement — not touching agent/tool/prompt
+code at all): STT and TTS both now stream instead of running one-shot.
+Real numbers measured this session: one-shot Recognize on a held clip took
+2-11s (highly variable) after release; StreamingRecognize, fed audio as
+it's captured, cut the wait AFTER release to ~1.5s since most recognition
+work already happened during the hold. One-shot synthesize_speech took
+2.6-2.8s before ANY audio could play; streaming_synthesize (sentence-
+chunked) gets the first audio chunk out in ~0.2-0.6s, so playback starts
+almost immediately instead of after the whole reply is synthesized. The
+LLM/tool-call leg (10-27s measured) is the actual dominant cost but is
+explicitly out of scope — real, disclosed, not something this pass touches.
 """
 
 from __future__ import annotations
@@ -306,36 +318,68 @@ async def _send_turn_to_agent(websocket: WebSocket, engine, state: dict[str, Any
 
     await _send_json(websocket, {"type": "transcript_delta", "speaker": "model", "text": final_text, "final": True})
 
+    # Streaming TTS (plan_v2 §16): sends each synthesized sentence as its
+    # own binary frame as soon as it's ready, instead of waiting for the
+    # WHOLE reply to synthesize before sending anything — real measured win,
+    # first audio chunk in ~0.2-0.6s vs. 2.6-2.8s for the one-shot call.
+    # Frames are raw PCM16 @ speech.TTS_SAMPLE_RATE_HZ (NOT a WAV file —
+    # contrast with the one-shot synthesize_speech's output); the frontend
+    # decodes them with PcmChunkPlayer, not decodeAudioData. tool_call_
+    # finished (sent after the last chunk) doubles as the "no more audio
+    # coming for this turn" signal — the frontend uses it to know when to
+    # stop waiting for further chunks, same real event already used to end
+    # a bookkeeping window elsewhere in this protocol.
     tts_call_id = f"c-{uuid.uuid4().hex[:8]}"
     await _send_json(
         websocket,
         {"type": "tool_call_started", "call_id": tts_call_id, "tool_name": "synthesize_speech", "args_summary": f"{len(final_text)} chars", **_TTS_DISCLOSURE},
     )
+    total_bytes = 0
     try:
-        audio_bytes = await asyncio.to_thread(speech.synthesize_speech, final_text)
+        async for chunk in speech.synthesize_speech_streaming(final_text):
+            total_bytes += len(chunk)
+            await websocket.send_bytes(chunk)
     except Exception as exc:
-        logger.exception("surgbot voice ws[%s]: synthesize_speech failed", state["session_id"])
+        logger.exception("surgbot voice ws[%s]: synthesize_speech_streaming failed", state["session_id"])
         await _send_json(websocket, {"type": "tool_call_finished", "call_id": tts_call_id, "summary": f"error: {exc}"})
         await _send_json(websocket, {"type": "error", "detail": f"Text-to-speech failed: {exc}"})
         return
-    await _send_json(websocket, {"type": "tool_call_finished", "call_id": tts_call_id, "summary": f"{len(audio_bytes)} bytes"})
-    await websocket.send_bytes(audio_bytes)
+    await _send_json(websocket, {"type": "tool_call_finished", "call_id": tts_call_id, "summary": f"{total_bytes} bytes"})
 
 
-async def _handle_audio_turn(websocket: WebSocket, engine, state: dict[str, Any], pcm16_bytes: bytes) -> None:
-    """Runs one accumulated push-to-talk clip through Cloud Speech-to-Text,
-    discloses that stage exactly like a tool call, then hands the real
-    transcript to _send_turn_to_agent — the STT leg of the pipeline."""
+async def _handle_audio_turn(
+    websocket: WebSocket, engine, state: dict[str, Any], stt_session: speech.StreamingTranscription | None
+) -> None:
+    """Finalizes one push-to-talk turn's real-time streaming transcription
+    (plan_v2 §16 — audio was already being fed to Cloud Speech-to-Text via
+    stt_session.push_audio() as it was captured, since mic_start; most of
+    the recognition work has typically already happened by the time this
+    runs), discloses that stage exactly like a tool call, then hands the
+    real transcript to _send_turn_to_agent."""
+    if stt_session is None:
+        # mic_stop with no matching mic_start (e.g. a stray/duplicate
+        # message) — nothing to finalize, not a real error.
+        return
+
     call_id = f"c-{uuid.uuid4().hex[:8]}"
-    logger.info("surgbot voice ws[%s]: starting transcribe_audio on %d bytes", state["session_id"], len(pcm16_bytes))
+    logger.info(
+        "surgbot voice ws[%s]: finalizing streaming transcribe_audio (%d bytes pushed)",
+        state["session_id"], stt_session.bytes_pushed,
+    )
     await _send_json(
         websocket,
-        {"type": "tool_call_started", "call_id": call_id, "tool_name": "transcribe_audio", "args_summary": f"{len(pcm16_bytes)} bytes", **_STT_DISCLOSURE},
+        {
+            "type": "tool_call_started",
+            "call_id": call_id,
+            "tool_name": "transcribe_audio",
+            "args_summary": f"streaming, {stt_session.bytes_pushed} bytes",
+            **_STT_DISCLOSURE,
+        },
     )
     try:
-        transcript = await asyncio.to_thread(speech.transcribe_audio, pcm16_bytes)
+        transcript = await stt_session.finish()
     except Exception as exc:
-        logger.exception("surgbot voice ws[%s]: transcribe_audio failed", state["session_id"])
+        logger.exception("surgbot voice ws[%s]: streaming transcribe_audio failed", state["session_id"])
         await _send_json(websocket, {"type": "tool_call_finished", "call_id": call_id, "summary": f"error: {exc}"})
         await _send_json(websocket, {"type": "error", "detail": f"Speech-to-text failed: {exc}"})
         return
@@ -399,7 +443,10 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
         "current_phase": None,
         "context_sent": False,
     }
-    audio_buffer = bytearray()
+    # Real streaming Speech-to-Text turn (plan_v2 §16) — created fresh on
+    # each mic_start, fed every captured chunk AS IT ARRIVES (not
+    # accumulated and sent as one blob on release), finalized on mic_stop.
+    stt_session: speech.StreamingTranscription | None = None
 
     try:
         while True:
@@ -413,7 +460,8 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
 
             data = message.get("bytes")
             if data is not None:
-                audio_buffer.extend(data)
+                if stt_session is not None:
+                    stt_session.push_audio(bytes(data))
                 continue
 
             text = message.get("text")
@@ -427,15 +475,15 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
 
             msg_type = control.get("type")
             if msg_type == "mic_start":
-                # A fresh accumulator for this turn's audio — no
-                # activity_start wire concept anymore, this is purely local
-                # bookkeeping now that there's no continuously-listening
-                # server-side connection to signal.
-                audio_buffer.clear()
+                # Real StreamingRecognize session, started immediately —
+                # audio pushed below (in the binary-frame branch) starts
+                # reaching Cloud Speech-to-Text while the reviewer is still
+                # talking, not only after they release (plan_v2 §16).
+                stt_session = speech.StreamingTranscription(sample_rate_hz=16000)
+                stt_session.start()
             elif msg_type == "mic_stop":
-                pcm16_bytes = bytes(audio_buffer)
-                audio_buffer.clear()
-                await _handle_audio_turn(websocket, engine, state, pcm16_bytes)
+                session_to_finish, stt_session = stt_session, None
+                await _handle_audio_turn(websocket, engine, state, session_to_finish)
             elif msg_type == "text_turn":
                 await _send_turn_to_agent(websocket, engine, state, control.get("text", ""))
             elif msg_type == "end_session":
