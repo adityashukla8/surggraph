@@ -4,13 +4,15 @@ each as its OWN separate reasoning engine with identity_type=AGENT_IDENTITY,
 then smoke-tests each with a trivial real prompt and prints the real
 response.
 
-Real, empirically-confirmed architecture decision this session: unlike
-SurgBot's root Live agent (whose own outbound Live API call breaks under
-AGENT_IDENTITY — see agents/surgbot/live_model.py), a plain Gemini-3.5
-tool-calling agent deployed with identity_type=AGENT_IDENTITY worked
-end-to-end in a real deploy+invoke spike. So every SurgBot subagent gets real
-Agent Identity — "everything GEAP deployed" is a literal requirement, not
-just a Runtime-for-the-root-agent claim.
+Real, empirically-confirmed architecture decision this session: a plain
+Gemini-3.5 tool-calling agent deployed with identity_type=AGENT_IDENTITY
+worked end-to-end in a real deploy+invoke spike, so every SurgBot subagent
+gets real Agent Identity — "everything GEAP deployed" is a literal
+requirement, not just a Runtime-for-the-root-agent claim. (The root agent
+itself stays on service_account rather than identity_type for now — see
+scripts/deploy_surgbot_agent.py — a separate, still-open question from the
+Live-API-specific incompatibility that used to apply here too, before
+plan_v2 §15 migrated root_agent.py off the Live API entirely.)
 
 Deployment + caching logic lives in agents/surgbot/subagents.py::
 deploy_or_get_subagent — this script just calls it for each kind and reports

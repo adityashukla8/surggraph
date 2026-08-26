@@ -24,6 +24,8 @@ dependencies = [
     "imageio-ffmpeg>=0.6.0",
     "google-cloud-firestore>=2.28",
     "google-cloud-modelarmor>=0.7",
+    "google-cloud-speech>=2.33",
+    "google-cloud-texttospeech>=2.27",
 ]
 
 [dependency-groups]

@@ -16,27 +16,28 @@ honest in the other direction (root_agent must keep real tools; every OTHER
 SurgBot subagent must keep tools == []).
 
 build_root_agent() is never run locally by services/surgbot_service — it is
-deployed to GEAP Agent Runtime and invoked remotely via a real
-bidi_stream_query connection (scripts/deploy_surgbot_agent.py,
-services/surgbot_service/main.py). Wrapped in
-vertexai.preview.reasoning_engines.AdkApp (NOT vertexai.agent_engines.AdkApp
-— the STABLE class has no bidi support at all, confirmed by reading its
-source this session), deployed with agent_server_mode=EXPERIMENTAL and NO
-identity_type (AGENT_IDENTITY breaks this agent's own outbound Live API call
-— see agents/surgbot/live_model.py and scripts/deploy_surgbot_agent.py for
-the full, empirically-confirmed account).
+deployed to GEAP Agent Runtime and invoked remotely via async_stream_query
+(scripts/deploy_surgbot_agent.py, services/surgbot_service/main.py), the
+SAME STABLE vertexai.agent_engines.AdkApp + async_stream_query pattern
+agents/surgbot/subagents.py already uses successfully for three deployed
+subagents (plan_v2 §15 migrated the root agent off the EXPERIMENTAL
+bidi_stream_query transport entirely — real, repeated Live API crashes: a
+proprietary internal queue overflow on barge-in, and a real ~10-minute
+bidi_stream_query session ceiling hit live with a failed ADK auto-reconnect).
 
-DISCLOSURE, STRUCTURAL NOT COSMETIC: this agent's own reasoning voice runs on
-a Live API model that is NOT Gemini 3.5+ (no such model exists with
-function-calling support today — see live_model.py) — every actual reasoning
-step (error-chain review, synthesis, cross-session pattern insight) is
-dispatched to a separately-deployed, real Gemini-3.5 Agent Runtime subagent
-(agents/surgbot/subagents.py) instead. TOOL_DISCLOSURE and TOOL_PHASE_MAP
-below are the static tables services/surgbot_service/main.py's relay reads to
-emit the mandatory ToolUseDisclosure (agents/surgbot/schema.py) and
-phase_changed events over the WebSocket control channel — every tool call
-must resolve to a real agent_name + model_id + api_surface triple, never a
-partial one.
+MODEL: real Gemini 3.5 via tools/gemini_model.py::new_agent_model() — the
+exact wrapper every other agent in this codebase already uses. This is a
+genuine simplification, not just a swap: before this migration, this
+project's own product disclosure was "Live API model for voice turn-taking,
+Gemini 3.5 for every actual reasoning step" (agents/surgbot/live_model.py,
+removed). That split no longer exists — every tool call in TOOL_DISCLOSURE
+below now discloses the same real Gemini 3.5 identity, whether it's a direct
+tool or a dispatch to a separately-deployed subagent (agents/surgbot/
+subagents.py). TOOL_DISCLOSURE and TOOL_PHASE_MAP are the static tables
+services/surgbot_service/main.py's relay reads to emit the mandatory
+ToolUseDisclosure (agents/surgbot/schema.py) and phase_changed events over
+the WebSocket control channel — every tool call must resolve to a real
+agent_name + model_id + api_surface triple, never a partial one.
 """
 
 from __future__ import annotations
@@ -51,9 +52,9 @@ from google.adk.agents import Agent
 
 from agents.surgbot import case_index, memory_bank, slices, store, subagents
 from agents.surgbot.graph_reader import build_index, get_case_indexes
-from agents.surgbot.live_model import SURGBOT_LIVE_MODEL, new_live_agent_model
 from agents.surgbot.model_armor import screen_review_document
 from agents.surgbot.schema import CaseReviewDocument, ReviewFeedbackItem
+from tools.gemini_model import GEMINI_MODEL, new_agent_model
 
 # Same real bug found in services/surgbot_service/main.py this session,
 # confirmed here too via Cloud Logging: this module is what actually runs
@@ -71,24 +72,24 @@ for _noisy_logger in ("httpx", "httpcore", "google", "google.auth", "urllib3", "
 
 logger = logging.getLogger(__name__)
 
-# Real Gemini-3.5 identity every subagent tool call actually runs on —
-# tools/gemini_model.py::GEMINI_MODEL, read once here rather than imported
-# directly so this module has no hard import-time dependency on that file's
-# env var resolution succeeding inside a deployed sandbox that might not have
-# GEMINI_MODEL set (env_vars are passed explicitly at deploy time instead —
-# see scripts/deploy_surgbot_subagents.py).
-_SUBAGENT_MODEL_ID = "gemini-3.5-flash"
-
+# Every tool now discloses the SAME real Gemini 3.5 identity
+# (tools/gemini_model.py::GEMINI_MODEL) whether it's a direct root-agent tool
+# or a dispatch to a separately-deployed subagent (agents/surgbot/
+# subagents.py) — the old "Live model for root, Gemini 3.5 for subagents"
+# split no longer exists (see this module's docstring). GEMINI_MODEL reads
+# GEMINI_MODEL env var with a safe "gemini-3.5-flash" default, so importing
+# it directly at module load time (unlike the old deploy-only-value pattern
+# elsewhere in this file) is safe inside the deployed sandbox either way.
 TOOL_DISCLOSURE: dict[str, dict[str, str]] = {
-    "list_accessible_cases": {"agent_name": "surgbot_root", "model_id": SURGBOT_LIVE_MODEL, "api_surface": "vertex_ai_live"},
-    "get_error_statistics_across_cases": {"agent_name": "surgbot_root", "model_id": SURGBOT_LIVE_MODEL, "api_surface": "vertex_ai_live"},
-    "load_case_graph": {"agent_name": "surgbot_root", "model_id": SURGBOT_LIVE_MODEL, "api_surface": "vertex_ai_live"},
-    "get_phase_detail": {"agent_name": "surgbot_root", "model_id": SURGBOT_LIVE_MODEL, "api_surface": "vertex_ai_live"},
-    "review_error_chain": {"agent_name": "surgbot_error_chain_reviewer", "model_id": _SUBAGENT_MODEL_ID, "api_surface": "vertex_ai_global"},
-    "review_proposal_divergence": {"agent_name": "surgbot_root", "model_id": SURGBOT_LIVE_MODEL, "api_surface": "vertex_ai_live"},
-    "record_feedback": {"agent_name": "surgbot_root", "model_id": SURGBOT_LIVE_MODEL, "api_surface": "vertex_ai_live"},
-    "draft_review_document": {"agent_name": "surgbot_synthesis", "model_id": _SUBAGENT_MODEL_ID, "api_surface": "vertex_ai_global"},
-    "retrieve_reviewer_patterns": {"agent_name": "surgbot_pattern_insight", "model_id": _SUBAGENT_MODEL_ID, "api_surface": "vertex_ai_global"},
+    "list_accessible_cases": {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "get_error_statistics_across_cases": {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "load_case_graph": {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "get_phase_detail": {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "review_error_chain": {"agent_name": "surgbot_error_chain_reviewer", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "review_proposal_divergence": {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "record_feedback": {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "draft_review_document": {"agent_name": "surgbot_synthesis", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
+    "retrieve_reviewer_patterns": {"agent_name": "surgbot_pattern_insight", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"},
 }
 
 # Which review phase each tool call signals the conversation has reached —
@@ -110,7 +111,9 @@ TOOL_PHASE_MAP: dict[str, int] = {
 # All plain async functions, per this file's own deliberate exception to the
 # rest of the codebase's tools=[] convention. Each returns plain JSON-
 # serializable data (dict/list/str) — ADK's function-calling layer handles
-# turning that into a tool result the Live model can speak/reason about.
+# turning that into a tool result Gemini 3.5 can reason about and speak
+# (via services/surgbot_service/main.py's TTS leg — see agents/surgbot/
+# speech.py).
 
 
 async def list_accessible_cases() -> dict[str, Any]:
@@ -377,10 +380,13 @@ clarifying questions, guide the reviewer step by step through a fixed review
 script, and actively capture their feedback so it becomes a real, structured
 record — never just narrate the graph back at them.
 
-MANDATORY: you receive a silent, non-conversational session_id message when
-the connection opens — it is NOT a prompt to speak, and you MUST NOT respond
-to it or say anything at all until the reviewer actually speaks first. Stay
-completely silent until you hear the reviewer's own first words. 
+MANDATORY: the very first user message of a session includes a bracketed
+`[context: session_id=... reviewer_id=... case_ids=...]` tag prepended to
+the reviewer's actual first words. Read it once, silently — never speak the
+tag itself aloud, never mention it — and remember its session_id: pass that
+exact value to record_feedback and draft_review_document for the rest of
+this conversation, never a case_id, reviewer_id, or a value you invent.
+Respond normally to whatever real words follow the tag.
 
 When asked who are you/what can you do: introduce yourself and your capabilities in a quick 1-2
 sentences and mention that since all surgeons have different ways of
@@ -460,9 +466,9 @@ GENERAL RULES:
   should be captured via record_feedback as it's given, not just summarized
   at the end.
 - record_feedback and draft_review_document both require the exact
-  session_id you were given at the very start of this conversation (in the
-  "[session_init] session_id=..." message) — always pass that same value,
-  never a case_id, reviewer_id, or a value you invent.
+  session_id from the "[context: session_id=...]" tag at the very start of
+  this conversation — always pass that same value, never a case_id,
+  reviewer_id, or a value you invent.
 - Keep spoken responses natural and concise — you are a voice conversation,
   not a document."""
 
@@ -470,10 +476,11 @@ GENERAL RULES:
 def build_root_agent() -> Agent:
     """Builds SurgBot's root agent. NOT run locally — deployed to GEAP Agent
     Runtime (scripts/deploy_surgbot_agent.py) and invoked remotely via
-    bidi_stream_query (services/surgbot_service/main.py)."""
+    async_stream_query (services/surgbot_service/main.py), the same STABLE
+    AdkApp pattern agents/surgbot/subagents.py already uses."""
     return Agent(
         name="surgbot_root",
-        model=new_live_agent_model(),
+        model=new_agent_model(),
         instruction=_INSTRUCTION,
         tools=_TOOLS,
     )

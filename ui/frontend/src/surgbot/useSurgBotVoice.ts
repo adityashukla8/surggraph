@@ -10,7 +10,8 @@ import type {
   TranscriptDeltaMessage,
   TranscriptEntry,
 } from "./types";
-import { MIC_WORKLET_NAME, PCM_OUTPUT_SAMPLE_RATE, PcmPlayer, getMicWorkletBlobUrl } from "./audioWorklet";
+import type { AudioClipHandle } from "./audioWorklet";
+import { MIC_WORKLET_NAME, getMicWorkletBlobUrl, playAudioClip } from "./audioWorklet";
 
 const SURGBOT_SERVICE_URL = import.meta.env.VITE_SURGBOT_SERVICE_URL ?? "http://127.0.0.1:8091";
 
@@ -37,23 +38,24 @@ interface SurgBotVoiceResult {
   toolEvents: ToolCallEvent[];
   reviewDocument: ReviewDocument | null;
   /** True only while the user is actively holding the push-to-talk control
-   *  (mic audio is being streamed AND the server has been told a real turn
+   *  (mic audio is being captured AND the server has been told a real turn
    *  is in progress) — not merely "mic capture is attached." */
   isListening: boolean;
-  /** True while the model is producing audio and/or a non-final transcript
-   *  delta — a real, observed signal (Web Audio playback + transcript
-   *  streaming state), never a guess. */
+  /** True for the WHOLE classic STT -> LLM -> TTS pipeline of one turn
+   *  (plan_v2 §15) — from the moment the held clip is sent (mic_stop) or a
+   *  text_turn is sent, until the synthesized reply clip finishes playing
+   *  (or the turn errors out). Broader than "audio is literally playing":
+   *  covers real transcription + reasoning/tool-call time too, so the orb
+   *  reads as "SurgBot is working" for the entire round trip, not just its
+   *  last leg. */
   isModelSpeaking: boolean;
   start: (caseIds: string[], reviewerId: string) => void;
   stop: () => void;
-  /** Push-to-talk: real user report ("implement tap and hold to speak to
-   *  avoid interruption and hence the queue problem") — real Cloud Logging
-   *  evidence tied automatic VAD-triggered barge-in directly to a genuine
-   *  server-side crash (assembly_service.py's internal queue overflowing).
-   *  automatic_activity_detection is now disabled server-side; these two
-   *  functions are the ONLY way a turn boundary gets communicated at all —
-   *  call startTalking() on press, stopTalking() on release. Mic audio is
-   *  only ever streamed to the socket between the two. */
+  /** Push-to-talk: startTalking() on press clears the local capture buffer
+   *  and begins accumulating mic audio; stopTalking() on release sends the
+   *  whole accumulated clip as one binary frame followed by mic_stop,
+   *  kicking off the server's real STT -> LLM -> TTS pipeline for that turn
+   *  (plan_v2 §15). Mic audio is only ever captured between the two calls. */
   startTalking: () => void;
   stopTalking: () => void;
   /** Reconnects after a disconnect WITHOUT wiping transcript/toolEvents/
@@ -73,7 +75,9 @@ interface SurgBotVoiceResult {
 }
 
 /** Opens the SurgBot voice WebSocket, captures the mic as 16kHz mono PCM16
- *  and streams it out as binary frames, plays incoming PCM16 binary frames
+ *  while held, sends the whole accumulated clip as one binary frame on
+ *  release (plan_v2 §15 — classic STT -> LLM -> TTS, not a continuous
+ *  stream), decodes and plays the one synthesized reply clip that comes
  *  back, and parses control-channel JSON frames into React state.
  *
  * Status contract deliberately mirrors useCaseStateStream.ts's shape
@@ -101,18 +105,21 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
   const [toolEvents, setToolEvents] = useState<ToolCallEvent[]>([]);
   const [reviewDocument, setReviewDocument] = useState<ReviewDocument | null>(null);
   const [isListening, setIsListening] = useState(false);
-  const [audioPlaying, setAudioPlaying] = useState(false);
-  const [modelTextStreaming, setModelTextStreaming] = useState(false);
+  const [turnInProgress, setTurnInProgress] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micNodeRef = useRef<AudioWorkletNode | null>(null);
-  const playerRef = useRef<PcmPlayer | null>(null);
+  const playerRef = useRef<AudioClipHandle | null>(null);
+  // Accumulates captured PCM16 chunks for the CURRENT held turn — plan_v2
+  // §15 sends the whole clip once on release, not a continuous stream, so
+  // chunks are buffered client-side instead of forwarded per-frame.
+  const audioChunksRef = useRef<ArrayBuffer[]>([]);
   // Read inside the AudioWorkletNode's onmessage handler, which fires many
-  // times per second — a ref (not state) so gating the send doesn't need a
-  // re-render on every single audio chunk, only isListening (the React
-  // state mirror, for UI) changes on press/release.
+  // times per second — a ref (not state) so gating the accumulation doesn't
+  // need a re-render on every single audio chunk, only isListening (the
+  // React state mirror, for UI) changes on press/release.
   const isHoldingRef = useRef(false);
   const cancelledRef = useRef(true); // true until start() is called
   const sessionIdRef = useRef<string | null>(null);
@@ -124,6 +131,7 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
 
   const teardownAudio = useCallback(() => {
     isHoldingRef.current = false;
+    audioChunksRef.current = [];
     micNodeRef.current?.port.close();
     micNodeRef.current?.disconnect();
     micNodeRef.current = null;
@@ -138,8 +146,7 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     }
     audioCtxRef.current = null;
     setIsListening(false);
-    setAudioPlaying(false);
-    setModelTextStreaming(false);
+    setTurnInProgress(false);
   }, []);
 
   const handleTranscriptDelta = useCallback((msg: TranscriptDeltaMessage) => {
@@ -166,7 +173,6 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
       if (!msg.final) activeEntryIdRef.current[msg.speaker] = id;
       return [...prev, { id, speaker: msg.speaker, text: msg.text, final: msg.final, at: Date.now() }];
     });
-    if (msg.speaker === "model") setModelTextStreaming(!msg.final);
   }, []);
 
   const handleServerMessage = useCallback(
@@ -208,30 +214,20 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
             approval_status: msg.approval_status as ApprovalStatus,
           });
           break;
-        case "session_resumption_handle":
-          // Carried so a future reconnect (services/surgbot_service's own
-          // >10-minute bidi_stream_query ceiling, plan §14.4) can resume the
-          // same logical session — nothing to render; stored for later use
-          // once the relay's resumption contract is final.
-          break;
-        case "interrupted":
-          // Real barge-in: the server-side model's generation was just
-          // canceled because VAD detected the reviewer talking over it.
-          // Flush whatever's queued/playing immediately — without this the
-          // bot's stale audio keeps playing on top of the interrupting
-          // speaker, which is the opposite of what barge-in is for.
-          playerRef.current?.stop();
-          setAudioPlaying(false);
-          break;
         case "error":
+          // A failed turn anywhere in the STT -> LLM -> TTS pipeline (no
+          // speech detected, transcription failure, agent error, synthesis
+          // failure) — reset turnInProgress so the orb doesn't stay stuck
+          // "working" forever with nothing left to end it.
           setError(msg.detail);
+          setTurnInProgress(false);
           break;
       }
     },
     [handleTranscriptDelta],
   );
 
-  const initAudioCapture = useCallback((ws: WebSocket) => {
+  const initAudioCapture = useCallback(() => {
     void (async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -248,11 +244,11 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
         node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
           // Push-to-talk gate: the worklet runs continuously once attached
           // (Web Audio has no cheap pause/resume for a running graph), but
-          // audio is only ever sent to the server while the user is
-          // actively holding — see startTalking/stopTalking below. Sending
-          // outside that window would arrive with no activity_start/
-          // activity_end boundary now that automatic VAD is disabled.
-          if (isHoldingRef.current && ws.readyState === WebSocket.OPEN) ws.send(event.data);
+          // audio is only ever CAPTURED while the user is actively holding —
+          // see startTalking/stopTalking below. Chunks are accumulated
+          // locally now (plan_v2 §15 sends one whole clip on release), not
+          // forwarded to the socket per-frame.
+          if (isHoldingRef.current) audioChunksRef.current.push(event.data);
         };
         // AudioWorkletNode.process() only actually runs while the node is
         // reachable from the destination — route through a zero-gain node
@@ -262,10 +258,6 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
         mute.gain.value = 0;
         source.connect(node).connect(mute).connect(ctx.destination);
         micNodeRef.current = node;
-
-        // Live API's spoken-audio output is 24kHz, not the 16kHz the mic
-        // captures at — see audioWorklet.ts's PCM_OUTPUT_SAMPLE_RATE comment.
-        playerRef.current = new PcmPlayer(ctx, PCM_OUTPUT_SAMPLE_RATE, () => setAudioPlaying(false));
         // isListening now means "actively holding push-to-talk," not "mic
         // capture is attached" — that's a silent readiness state with
         // nothing to show the user, so it's intentionally NOT surfaced here.
@@ -307,7 +299,7 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
       ws.send(JSON.stringify(startMsg));
       setStatus("connected");
       setError(null);
-      initAudioCapture(ws);
+      initAudioCapture();
     };
 
     ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
@@ -319,8 +311,14 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
         }
         return;
       }
-      playerRef.current?.enqueue(event.data);
-      setAudioPlaying(true);
+      // One complete synthesized reply clip per turn (plan_v2 §15) — decode
+      // and play it once, rather than the old continuous PCM16 enqueue.
+      if (!audioCtxRef.current) return;
+      playerRef.current?.stop();
+      playerRef.current = playAudioClip(audioCtxRef.current, event.data, () => {
+        playerRef.current = null;
+        setTurnInProgress(false);
+      });
     };
 
     ws.onerror = () => {
@@ -331,17 +329,11 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     ws.onclose = () => {
       wsRef.current = null;
       teardownAudio();
-      // Real gap found from a real user report ("messages show up broken,
-      // not in one text box"): the deployed agent's own EXPERIMENTAL bidi
-      // server can crash mid-utterance (a real internal queue overflow —
-      // see services/surgbot_service/main.py's _AUDIO_FLUSH_INTERVAL_S
-      // comment), and every reconnect used to wipe activeEntryIdRef with no
-      // regard for whatever was still streaming — so the NEXT delta after
-      // reconnecting would start a brand-new bubble, and if disconnects were
-      // frequent enough, nearly every few-word fragment got its own bubble.
-      // Closing out whatever was in flight as a finished bubble (not
-      // deleting it, not silently continuing it) is the honest
-      // representation: the turn really was interrupted here.
+      // A real disconnect (network drop, relay restart) mid-turn can leave
+      // a transcript entry still marked non-final — close it out as a
+      // finished bubble (not deleting it, not silently continuing it) so a
+      // subsequent reconnect starts a genuinely new bubble instead of
+      // resuming into a stale one.
       setTranscript((prev) =>
         prev.map((entry) =>
           entry.id === activeEntryIdRef.current.user || entry.id === activeEntryIdRef.current.model
@@ -401,11 +393,13 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const msg: ClientMessage = { type: "text_turn", text };
     ws.send(JSON.stringify(msg));
+    setTurnInProgress(true);
   }, []);
 
   const startTalking = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    audioChunksRef.current = [];
     isHoldingRef.current = true;
     setIsListening(true);
     const msg: ClientMessage = { type: "mic_start" };
@@ -416,9 +410,29 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     isHoldingRef.current = false;
     setIsListening(false);
     const ws = wsRef.current;
+
+    // Concatenate every chunk captured while held into ONE buffer and send
+    // it as a single binary frame (plan_v2 §15 — the whole clip at once,
+    // not a continuous stream), THEN the mic_stop boundary marker —
+    // preserves the same ordering discipline the old streaming protocol
+    // already relied on (audio before the turn-complete signal).
+    const chunks = audioChunksRef.current;
+    audioChunksRef.current = [];
+    if (ws && ws.readyState === WebSocket.OPEN && chunks.length > 0) {
+      const totalBytes = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+      const combined = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
+      ws.send(combined.buffer);
+    }
+
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const msg: ClientMessage = { type: "mic_stop" };
     ws.send(JSON.stringify(msg));
+    setTurnInProgress(true);
   }, []);
 
   // Unmount safety net — never leave a mic stream or socket running past the
@@ -440,7 +454,7 @@ export function useSurgBotVoice(): SurgBotVoiceResult {
     toolEvents,
     reviewDocument,
     isListening,
-    isModelSpeaking: audioPlaying || modelTextStreaming,
+    isModelSpeaking: turnInProgress,
     start,
     stop,
     retry,

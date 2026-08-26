@@ -37,7 +37,7 @@ PHASE_LABELS: dict[int, str] = {
 
 AgreementVerdict = Literal["agree", "disagree", "uncertain"]
 
-ApiSurface = Literal["vertex_ai_global", "vertex_ai_live"]
+ApiSurface = Literal["vertex_ai_global", "google_cloud_speech", "google_cloud_tts"]
 
 ApprovalStatus = Literal["drafting", "pending", "blocked", "approved", "rejected", "edited"]
 
@@ -48,13 +48,13 @@ def _now() -> datetime:
 
 class ToolUseDisclosure(BaseModel):
     """The hard, non-optional disclosure record for every tool/agent
-    invocation SurgBot's root agent makes. agent_name and model_id are
-    required fields, never optional, specifically so the UI can never render
-    a disclosure chip with one half missing — see plan §14.0's disclosure
-    requirement: this project uses a Live API model (below the hackathon's
-    "Gemini 3.5+" bar) for voice/turn-taking only, while every actual
-    reasoning step runs on real Gemini 3.5 — that distinction must never be
-    blurred or hidden, and this schema is the mechanism that enforces it.
+    invocation SurgBot's root agent makes, AND (plan_v2 §15) for the STT/TTS
+    pipeline stages either side of it — agent_name and model_id are required
+    fields, never optional, specifically so the UI can never render a
+    disclosure chip with one half missing. Every reasoning step runs on real
+    Gemini 3.5 (api_surface="vertex_ai_global"); the two speech stages
+    disclose their own real service ("google_cloud_speech"/
+    "google_cloud_tts") — never hidden, never blurred together.
     """
 
     call_id: str
@@ -104,8 +104,7 @@ class SurgBotSession(BaseModel):
     case_ids: list[str]
     reviewer_id: str
     current_phase: ReviewPhase = 1
-    live_model_id: str = ""
-    running_summary: str = ""  # carried-forward context across a bidi reconnect (§14.4)
+    reasoning_model_id: str = ""  # provenance: which Gemini model handled this session
     review_id: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

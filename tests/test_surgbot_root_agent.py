@@ -51,12 +51,11 @@ def test_phase_map_only_references_real_review_phases():
         assert phase in valid_phases, f"{tool_name} maps to invalid phase {phase}"
 
 
-def test_subagent_dispatching_tools_disclose_gemini_35_not_live_model():
-    """The specific, hard product requirement: a tool that dispatches to a
-    deployed Gemini-3.5 subagent must disclose THAT model, not the Live
-    model the root agent's own voice runs on — this is exactly the
-    distinction the disclosure banner exists to make legible."""
-    for tool_name in ("review_error_chain", "draft_review_document", "retrieve_reviewer_patterns"):
-        entry = TOOL_DISCLOSURE[tool_name]
-        assert entry["api_surface"] == "vertex_ai_global"
-        assert "live" not in entry["model_id"].lower()
+def test_all_tools_disclose_gemini_35_no_live_model():
+    """plan_v2 §15: the root agent moved off the Live API entirely — every
+    tool, not just subagent-dispatching ones, now discloses real Gemini 3.5
+    over the plain Vertex AI surface. No tool should ever disclose a Live
+    model again."""
+    for tool_name, entry in TOOL_DISCLOSURE.items():
+        assert entry["api_surface"] == "vertex_ai_global", f"{tool_name} has unexpected api_surface {entry['api_surface']!r}"
+        assert "live" not in entry["model_id"].lower(), f"{tool_name} still discloses a Live model: {entry['model_id']!r}"

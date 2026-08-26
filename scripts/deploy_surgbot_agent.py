@@ -1,23 +1,18 @@
-"""Deploys SurgBot's root agent to GEAP Agent Runtime in EXPERIMENTAL
-bidi-streaming mode, then smoke-tests it via a real bidi_stream_query
-round trip with a text turn (no synthesized PCM audio needed — Live API
-supports text-based turns as a documented interaction mode even in an
-audio-primary session, confirmed empirically below).
-
-Extends scripts/spike_surgbot_live_roundtrip.py's already-proven deploy
-shape: vertexai.preview.reasoning_engines.AdkApp (NOT vertexai.agent_engines
-— the STABLE class has no bidi support), agent_server_mode=EXPERIMENTAL, NO
-identity_type (AGENT_IDENTITY breaks this agent's own outbound Live API call
-— see agents/surgbot/live_model.py). This is now the load-bearing deploy
-path for the real root_agent.py (8 real tools, several of which dispatch to
-the separately-deployed SurgBot subagents), not a throwaway stub.
+"""Deploys SurgBot's root agent to GEAP Agent Runtime as a STABLE
+vertexai.agent_engines.AdkApp, then smoke-tests it via a real
+async_stream_query call — the exact deploy+invoke shape
+scripts/deploy_surgbot_subagents.py already uses successfully for three
+real subagents (plan_v2 §15 migrated root_agent.py onto this SAME path,
+off the EXPERIMENTAL bidi_stream_query transport it used to require for
+Live API audio — real, repeated crashes there are the reason: a proprietary
+internal queue overflow on barge-in, and a real ~10-minute bidi_stream_query
+session ceiling hit live with a failed ADK auto-reconnect).
 
 The deployed resource's name is cached in .deployed_root_agent.json next to
 this script (gitignored) so re-running this script reuses an existing
 deployment instead of redeploying every time root_agent.py's tools haven't
 actually changed — pass --force to redeploy unconditionally (needed whenever
-root_agent.py's tool set changes, per plan §14.6 Day 4's note that every
-tool-set change needs a fresh deploy).
+root_agent.py's tool set changes).
 
 Usage: uv run python3 scripts/deploy_surgbot_agent.py [--force]
 """
@@ -32,13 +27,13 @@ from pathlib import Path
 
 import vertexai
 from dotenv import load_dotenv
-from vertexai import types as vertexai_types
-from vertexai.preview.reasoning_engines import AdkApp
+from vertexai import agent_engines
 
-from agents.surgbot.live_model import SURGBOT_LIVE_LOCATION, SURGBOT_LIVE_MODEL, SURGBOT_LIVE_VOICE
 from agents.surgbot.root_agent import build_root_agent
+from agents.surgbot.speech import SPEECH_LANGUAGE_CODE, SPEECH_REGION, TTS_REGION, TTS_VOICE
 from agents.surgbot.subagents import SUBAGENT_KINDS
 from agents.surgbot.subagents import _DEPLOY_CACHE_PATH as _SUBAGENT_CACHE_PATH
+from tools.gemini_model import GEMINI_MODEL
 
 load_dotenv()
 
@@ -49,24 +44,16 @@ STAGING_BUCKET = f"gs://{os.environ['SURGGRAPH_GCS_BUCKET']}"
 DISPLAY_NAME = "surgbot-root-agent"
 _CACHE_PATH = Path(__file__).resolve().parent / ".deployed_root_agent.json"
 
-# Real bug found via Cloud Logging this session (aiplatform.googleapis.com/
-# reasoning_engine_stderr on this exact deployment, right after a genuine
-# `list_accessible_cases` function_call round-tripped correctly): with no
-# identity_type set, root_agent runs as the project's default Reasoning
-# Engine Service Agent (service-{PROJECT_NUMBER}@gcp-sa-aiplatform-re.iam.
-# gserviceaccount.com, confirmed via `gcloud projects get-iam-policy`), which
-# has NO Firestore role — case_index.py's Firestore call inside the deployed
-# sandbox failed with a real PERMISSION_DENIED, which surfaced to the client
-# as a generic "Reasoning Engine Execution failed" / resource_exhausted
-# close. Fix: run root_agent AS the SAME existing runtime service account
-# services/state_service and services/orchestrator_service already use for
-# Cloud Run (confirmed via IAM policy to already hold roles/datastore.user
-# AND roles/modelarmor.user — exactly the two things this agent's tools need
-# and the default Reasoning Engine Service Agent lacks), via the
-# `service_account` config field — mutually exclusive with identity_type
-# (IdentityType.AGENT_IDENTITY's own docstring: "the service_account field
-# must not be set"), which is fine since root_agent already omits
-# identity_type for the separate Live-API-auth reason above.
+# Real bug found via Cloud Logging earlier this session: with no
+# identity_type/service_account set, root_agent runs as the project's
+# default Reasoning Engine Service Agent, which has NO Firestore role.
+# Run root_agent AS the SAME existing runtime service account
+# services/state_service and services/orchestrator_service already use
+# (confirmed via IAM policy to hold roles/datastore.user AND
+# roles/modelarmor.user — exactly what this agent's tools need).
+# NOT switched to identity_type=AGENT_IDENTITY in this pass (plan_v2 §15.1):
+# that principal's own IAM grants (Firestore, Model Armor) are unverified,
+# and this migration is already large enough — documented as a follow-up.
 SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT = os.environ.get(
     "SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT", f"surggraph-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
 )
@@ -148,12 +135,12 @@ def deploy(client: vertexai.Client, force: bool = False):
             return found
 
     root_agent = build_root_agent()
-    app = AdkApp(agent=root_agent)  # preview class — has real bidi_stream_query
+    app = agent_engines.AdkApp(agent=root_agent)  # STABLE class — no bidi needed anymore (plan_v2 §15)
 
     print(
         f"Deploying SurgBot root agent to Agent Runtime "
-        f"(project={PROJECT_ID}, region={REGION}, live_model={SURGBOT_LIVE_MODEL}@{SURGBOT_LIVE_LOCATION}, "
-        f"voice={SURGBOT_LIVE_VOICE}, agent_server_mode=EXPERIMENTAL, 8 real tools)..."
+        f"(project={PROJECT_ID}, region={REGION}, model={GEMINI_MODEL}@global, "
+        f"stt_region={SPEECH_REGION}, tts_region={TTS_REGION}, tts_voice={TTS_VOICE}, 9 real tools)..."
     )
     engine = client.agent_engines.create(
         agent=app,
@@ -166,6 +153,8 @@ def deploy(client: vertexai.Client, force: bool = False):
                 "python-dotenv",
                 "google-cloud-firestore",
                 "google-cloud-modelarmor",
+                "google-cloud-speech",
+                "google-cloud-texttospeech",
                 "httpx",
                 "requests",
             ],
@@ -175,18 +164,14 @@ def deploy(client: vertexai.Client, force: bool = False):
                 "SURGGRAPH_PROJECT_ID": PROJECT_ID,
                 "SURGGRAPH_REGION": REGION,
                 "SURGGRAPH_GCS_BUCKET": os.environ["SURGGRAPH_GCS_BUCKET"],
-                "SURGBOT_LIVE_MODEL": SURGBOT_LIVE_MODEL,
-                "SURGBOT_LIVE_LOCATION": SURGBOT_LIVE_LOCATION,
-                # Real gap found this session: speech_config is set on the
-                # model itself (live_model.py), which is built INSIDE the
-                # deployed sandbox — its own env, not this local process's —
-                # so voice selection must be baked in at deploy time too, the
-                # same way SURGBOT_LIVE_MODEL/LOCATION already are.
-                "SURGBOT_LIVE_VOICE": SURGBOT_LIVE_VOICE,
-                "GEMINI_MODEL": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+                "GEMINI_MODEL": GEMINI_MODEL,
                 "GEMINI_LOCATION": os.environ.get("GEMINI_LOCATION", "global"),
+                "SURGBOT_SPEECH_REGION": SPEECH_REGION,
+                "SURGBOT_TTS_REGION": TTS_REGION,
+                "SURGBOT_SPEECH_LANGUAGE_CODE": SPEECH_LANGUAGE_CODE,
+                "SURGBOT_TTS_VOICE": TTS_VOICE,
                 "FIRESTORE_DATABASE": os.environ.get("FIRESTORE_DATABASE", "(default)"),
-                # Real bug found this session (Cloud Logging: httpx.
+                # Real bug found earlier this session (Cloud Logging: httpx.
                 # RemoteProtocolError "illegal request line" on every
                 # load_case_graph call): this used to read STATE_SERVICE_URL
                 # directly, silently baking THIS MACHINE's own local-dev
@@ -198,13 +183,8 @@ def deploy(client: vertexai.Client, force: bool = False):
                 **_subagent_resource_env_vars(),
                 **_TELEMETRY_ENV_VARS,
             },
-            "agent_server_mode": vertexai_types.AgentServerMode.EXPERIMENTAL,
             "service_account": SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT,
-            # NO identity_type — see agents/surgbot/live_model.py's docstring
-            # and this file's module docstring: AGENT_IDENTITY breaks this
-            # agent's own outbound Live API call, confirmed twice this
-            # session. (identity_type and service_account are mutually
-            # exclusive anyway — see this file's module-level comment above.)
+            # NO identity_type — see this file's module-level comment above.
         },
     )
     cache["resource_name"] = engine.api_resource.name
@@ -213,75 +193,43 @@ def deploy(client: vertexai.Client, force: bool = False):
     return engine
 
 
-async def smoke_test(client: vertexai.Client, engine) -> bool:
-    """Opens a real bidi_stream_query connection and sends ONE text turn
-    (Live API documents text-based turns as a valid interaction mode even in
-    an audio-primary session — this avoids needing synthesized PCM audio just
-    to prove the deployed agent's tool-calling path actually works)."""
-    resource_name = engine.api_resource.name
-    print(f"\nConnecting to bidi_stream_query on {resource_name}...")
+async def smoke_test(engine) -> bool:
+    """Real async_stream_query call — the exact pattern
+    scripts/deploy_surgbot_subagents.py::smoke_test_all already proves works
+    for this deployment class. No Live API/bidi/audio involved at all."""
+    print("\nSending a real text turn via async_stream_query...")
 
-    saw_error = False
     saw_tool_call = False
     saw_text = False
-    events_seen = 0
+    final_text = ""
 
-    async with client.aio.live.agent_engines.connect(
-        agent_engine=resource_name,
-        config={"class_method": "bidi_stream_query"},
-    ) as connection:
-        await connection.send(
-            {
-                "user_id": "surgbot-deploy-smoke-test",
-                "live_request": {
-                    "content": {
-                        "role": "user",
-                        "parts": [{"text": "Please list the accessible cases to start a review session."}],
-                    }
-                },
-            }
-        )
+    async for event in engine.async_stream_query(
+        user_id="surgbot-deploy-smoke-test",
+        message="Please list the accessible cases to start a review session.",
+    ):
+        print("EVENT:", json.dumps(event)[:400])
+        content = event.get("content") or {}
+        for part in content.get("parts", []) or []:
+            if part.get("function_call") or part.get("function_response"):
+                saw_tool_call = True
+            text = part.get("text")
+            if text:
+                saw_text = True
+                final_text = text
 
-        try:
-            # 40 was too small: the Live model speaks its mandatory
-            # disclosure sentence first (confirmed real this session — a
-            # correct, full disclosure of the Live-vs-Gemini-3.5 split), and
-            # that alone chops into dozens of small audio+transcript events
-            # before the model ever gets to calling a tool. Real observed
-            # count for "disclosure sentence, no tool call yet" was 40/40
-            # exhausted with zero tool calls — raised well past that.
-            while events_seen < 200:
-                response = await asyncio.wait_for(connection.receive(), timeout=45.0)
-                events_seen += 1
-                print("EVENT:", json.dumps(response)[:800])
-                event = response.get("bidiStreamOutput", response) if isinstance(response, dict) else response
-                if isinstance(event, dict):
-                    if event.get("error_code"):
-                        saw_error = True
-                    content = event.get("content") or {}
-                    for part in content.get("parts", []) or []:
-                        if part.get("function_call") or part.get("function_response"):
-                            saw_tool_call = True
-                        if part.get("text"):
-                            saw_text = True
-        except asyncio.TimeoutError:
-            print("No further events within 45s — treating stream as finished.")
-        except Exception as exc:
-            print(f"Stream ended: {exc!r}")
-
-    print(f"\nTotal events observed: {events_seen}")
-    print(f"saw_tool_call={saw_tool_call} saw_text={saw_text} saw_error={saw_error}")
-    return (not saw_error) and saw_tool_call
+    print(f"\nsaw_tool_call={saw_tool_call} saw_text={saw_text}")
+    print(f"final_text={final_text!r}")
+    return saw_tool_call and saw_text
 
 
 def main() -> int:
     force = "--force" in sys.argv
     client = vertexai.Client(project=PROJECT_ID, location=REGION)
     engine = deploy(client, force=force)
-    success = asyncio.run(smoke_test(client, engine))
+    success = asyncio.run(smoke_test(engine))
 
     if success:
-        print("\nROOT AGENT DEPLOY + SMOKE TEST PASSED: real tool call round-tripped over bidi_stream_query.")
+        print("\nROOT AGENT DEPLOY + SMOKE TEST PASSED: real tool call round-tripped over async_stream_query.")
     else:
         print("\nROOT AGENT SMOKE TEST DID NOT CONFIRM A TOOL CALL — see events above.")
     print(f"Resource name: {engine.api_resource.name}")

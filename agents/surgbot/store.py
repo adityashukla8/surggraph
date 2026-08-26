@@ -72,9 +72,9 @@ async def get_session(session_id: str) -> SurgBotSession | None:
 
 
 async def update_session(session_id: str, **fields) -> None:
-    """Partial update — phase transitions, running_summary refresh, etc.
-    Merges rather than overwriting so a phase-change write never clobbers a
-    running_summary write racing it (and vice versa)."""
+    """Partial update — phase transitions, review_id linkage, etc. Merges
+    rather than overwriting so two concurrent field writes never clobber
+    each other."""
     client = _get_async_client()
     await client.collection(_SESSIONS_COLLECTION).document(session_id).set(
         {**fields, "updated_at": _now_iso()}, merge=True

@@ -1,6 +1,7 @@
-// Mic capture (-> 16kHz mono PCM16, out to the server) and playback (<- 16kHz
-// mono PCM16, in from the server) for SurgBot's voice path. Live API requires
-// exactly this format both directions (plan_v2 §14.4).
+// Mic capture (-> 16kHz mono PCM16, out to the server) for SurgBot's classic
+// STT -> LLM -> TTS voice path (plan_v2 §15). Cloud Speech-to-Text's
+// ExplicitDecodingConfig wants exactly this format (agents/surgbot/
+// speech.py::transcribe_audio).
 //
 // The capture side is a real AudioWorkletProcessor, registered via
 // audioContext.audioWorklet.addModule(). It's shipped as an inline source
@@ -13,22 +14,14 @@
 // calls so the resample is continuous across block boundaries rather than
 // re-basing (and audibly clicking) every ~2.7ms render quantum.
 //
-// The playback side is deliberately NOT a worklet: queueing whole
-// AudioBufferSourceNodes back-to-back against a running `nextStartTime`
-// cursor is the simplest thing that plays arriving PCM16 chunks glitch-free
-// and continuously, and needs no cross-thread messaging at all.
+// Playback is a single decoded clip per turn, not a continuous stream —
+// the old chunk-streaming PcmPlayer (queueing PCM16 fragments back-to-back
+// against a running cursor) no longer applies now that the server sends one
+// complete synthesized WAV per reply instead of a live audio stream. See
+// playAudioClip() below.
 
 export const MIC_WORKLET_NAME = "surgbot-mic-processor";
-// Live API's input/output rates are asymmetric — confirmed against Google's
-// own docs, not assumed: mic input is 16kHz, but the model's spoken audio
-// comes back at 24kHz. Playing 24kHz-sampled PCM through an AudioContext
-// buffer declared at 16kHz stretches playback ~1.5x slower and drops the
-// pitch by the same factor — this was the real cause of a reported "slow
-// motion, thick, robotic voice" that didn't change when the voice_name was
-// changed (changing which voice speaks can't fix a wrong playback rate,
-// which distorts every voice identically).
-export const PCM_SAMPLE_RATE = 16000; // mic capture / Live API input rate
-export const PCM_OUTPUT_SAMPLE_RATE = 24000; // Live API's spoken-audio output rate
+export const PCM_SAMPLE_RATE = 16000; // mic capture / Cloud Speech-to-Text input rate
 
 const MIC_PROCESSOR_SOURCE = `
 class SurgBotMicProcessor extends AudioWorkletProcessor {
@@ -91,67 +84,54 @@ export function getMicWorkletBlobUrl(): string {
   return cachedBlobUrl;
 }
 
-/** Schedules incoming 16kHz mono PCM16 chunks back-to-back against a running
- *  cursor so playback is continuous even though chunks arrive in bursts
- *  separated by network jitter. Each `enqueue` call is O(1) relative to
- *  history — nothing here re-plays or re-buffers earlier audio. */
-export class PcmPlayer {
-  private ctx: AudioContext;
-  private sampleRate: number;
-  private nextStartTime = 0;
-  private activeSources = new Set<AudioBufferSourceNode>();
-  private onQueueDrained?: () => void;
+export interface AudioClipHandle {
+  /** Stops playback immediately if still in progress (e.g. ending the
+   *  session mid-reply) — safe to call even after the clip already
+   *  finished on its own. */
+  stop(): void;
+}
 
-  constructor(ctx: AudioContext, sampleRate: number = PCM_SAMPLE_RATE, onQueueDrained?: () => void) {
-    this.ctx = ctx;
-    this.sampleRate = sampleRate;
-    this.onQueueDrained = onQueueDrained;
-  }
+/** Decodes and plays ONE complete synthesized reply clip (plan_v2 §15 — the
+ *  server now sends one full WAV per turn via Cloud Text-to-Speech, not a
+ *  continuous stream of PCM16 fragments, so there's no scheduling cursor to
+ *  maintain). decodeAudioData handles the real container format (WAV,
+ *  confirmed empirically against agents/surgbot/speech.py's actual output —
+ *  see tests/test_surgbot_speech.py) without this file needing to know the
+ *  exact byte layout. */
+export function playAudioClip(ctx: AudioContext, data: ArrayBuffer, onEnded?: () => void): AudioClipHandle {
+  let source: AudioBufferSourceNode | null = null;
+  let stopped = false;
 
-  enqueue(pcm16: ArrayBuffer): void {
-    if (pcm16.byteLength === 0) return;
-    const int16 = new Int16Array(pcm16);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-      const v = int16[i];
-      float32[i] = v < 0 ? v / 0x8000 : v / 0x7fff;
-    }
+  ctx
+    .decodeAudioData(data.slice(0))
+    .then((buffer) => {
+      if (stopped) return;
+      source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.onended = () => {
+        source = null;
+        onEnded?.();
+      };
+      source.start();
+    })
+    .catch(() => {
+      // Undecodable clip — treat playback as immediately ended rather than
+      // leaving the caller's "SurgBot is speaking" state stuck forever.
+      onEnded?.();
+    });
 
-    const buffer = this.ctx.createBuffer(1, float32.length, this.sampleRate);
-    buffer.copyToChannel(float32, 0);
-
-    const source = this.ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this.ctx.destination);
-
-    const now = this.ctx.currentTime;
-    const startAt = Math.max(now, this.nextStartTime);
-    source.start(startAt);
-    this.nextStartTime = startAt + buffer.duration;
-
-    this.activeSources.add(source);
-    source.onended = () => {
-      this.activeSources.delete(source);
-      if (this.activeSources.size === 0) this.onQueueDrained?.();
-    };
-  }
-
-  /** Stops everything immediately and resets the schedule cursor — used when
-   *  a session ends or reconnects, so stale audio from a torn-down connection
-   *  never keeps playing into the next one. */
-  stop(): void {
-    for (const source of this.activeSources) {
-      try {
-        source.stop();
-      } catch {
-        // Already stopped/ended — nothing to do.
+  return {
+    stop(): void {
+      stopped = true;
+      if (source) {
+        try {
+          source.stop();
+        } catch {
+          // Already stopped/ended — nothing to do.
+        }
+        source = null;
       }
-    }
-    this.activeSources.clear();
-    this.nextStartTime = 0;
-  }
-
-  get isPlaying(): boolean {
-    return this.activeSources.size > 0;
-  }
+    },
+  };
 }

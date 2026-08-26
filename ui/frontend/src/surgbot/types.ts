@@ -27,12 +27,13 @@ export const PHASE_FALLBACK_LABELS: Record<ReviewPhase, string> = {
   6: "Cross-session pattern review",
 };
 
-/** Which real API surface produced a tool/agent-use event. Gemini Live API
- *  drives voice turn-taking only; every actual reasoning step is a Gemini 3.5
- *  subagent call over the plain Vertex AI (non-Live) surface. Both values are
- *  disclosed identically and neither is ever hidden — see the disclosure
+/** Which real service produced a tool/agent-use event (plan_v2 §15: classic
+ *  STT -> LLM -> TTS pipeline). Every reasoning step (root agent and every
+ *  subagent) runs on real Gemini 3.5 over the plain Vertex AI surface; the
+ *  two speech stages disclose their own real service. All three are
+ *  disclosed identically and none is ever hidden — see the disclosure
  *  requirement in SurgBotPanel.tsx. */
-export type ApiSurface = "vertex_ai_global" | "vertex_ai_live";
+export type ApiSurface = "vertex_ai_global" | "google_cloud_speech" | "google_cloud_tts";
 
 export type ApprovalStatus = "drafting" | "pending" | "blocked" | "approved" | "rejected" | "edited";
 
@@ -58,12 +59,11 @@ export interface EndSessionMessage {
   type: "end_session";
 }
 
-/** Push-to-talk turn boundaries — real user report + real Cloud Logging
- *  evidence: automatic VAD-triggered barge-in reliably risked crashing the
- *  deployed agent's own internal event queue. automatic_activity_detection
- *  is now disabled server-side (services/surgbot_service/main.py); these
- *  mark exactly when a real user turn begins/ends instead, forwarded as
- *  LiveRequest.activity_start/activity_end. */
+/** Push-to-talk turn boundaries (plan_v2 §15 — classic STT -> LLM -> TTS
+ *  pipeline, no Live API involved anymore). mic_start clears the server's
+ *  per-turn audio accumulator; the client then streams binary PCM frames
+ *  while held; mic_stop signals the accumulated clip is complete and ready
+ *  for Cloud Speech-to-Text — see services/surgbot_service/main.py. */
 export interface MicStartMessage {
   type: "mic_start";
 }
@@ -125,24 +125,9 @@ export interface ReviewDocumentReadyMessage {
   approval_status: ApprovalStatus;
 }
 
-export interface SessionResumptionHandleMessage {
-  type: "session_resumption_handle";
-  handle: string;
-}
-
 export interface ServerErrorMessage {
   type: "error";
   detail: string;
-}
-
-/** Real barge-in signal: ADK's Event.interrupted, forwarded verbatim
- *  (services/surgbot_service/main.py) whenever server-side voice-activity
- *  detection cancels the model's in-progress generation because the reviewer
- *  started talking over it. No payload beyond the type — the only correct
- *  client action is to immediately stop whatever PCM audio is already
- *  queued/playing (see useSurgBotVoice.ts), not to wait for more data. */
-export interface InterruptedMessage {
-  type: "interrupted";
 }
 
 export type ServerMessage =
@@ -151,8 +136,6 @@ export type ServerMessage =
   | ToolCallFinishedMessage
   | TranscriptDeltaMessage
   | ReviewDocumentReadyMessage
-  | SessionResumptionHandleMessage
-  | InterruptedMessage
   | ServerErrorMessage;
 
 // ---------------------------------------------------------------------------

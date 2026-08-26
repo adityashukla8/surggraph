@@ -8,10 +8,11 @@ design): every one of these subagents is its OWN separately-deployed Agent
 Runtime reasoning engine, deployed via the STABLE vertexai.agent_engines.
 AdkApp WITH identity_type=AGENT_IDENTITY — confirmed working end to end this
 session via a real deploy+invoke of a plain Gemini-3.5 tool-calling agent
-with that identity type set (unlike the Live root agent, whose own outbound
-Live API call breaks under AGENT_IDENTITY — see agents/surgbot/live_model.py
-and scripts/deploy_surgbot_agent.py; that incompatibility does not apply
-here, since these subagents make no outbound Live API calls of their own).
+with that identity type set. (root_agent.py used to run on a separate Live
+API model that couldn't use AGENT_IDENTITY at all — see plan_v2 §15, which
+migrated root_agent.py off the Live API entirely; it now deploys via this
+SAME STABLE AdkApp class, just kept on service_account rather than
+identity_type for this pass — see scripts/deploy_surgbot_agent.py.)
 root_agent.py's tools invoke these REMOTELY via async_stream_query — the
 exact pattern already proven in scripts/spike_deploy_stub_agent.py::invoke()
 — never by constructing a local in-process LlmAgent. "Everything GEAP

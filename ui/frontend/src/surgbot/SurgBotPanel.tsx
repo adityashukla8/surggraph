@@ -48,11 +48,13 @@ function agentDisplay(agentName: string | null): string {
 function modelSurfaceDisplay(modelId: string | null, apiSurface: string | null): string {
   const model = modelId ?? "unknown model";
   const surface =
-    apiSurface === "vertex_ai_live"
-      ? "Vertex AI Live API"
-      : apiSurface === "vertex_ai_global"
-        ? "Vertex AI"
-        : "unknown API surface";
+    apiSurface === "vertex_ai_global"
+      ? "Vertex AI"
+      : apiSurface === "google_cloud_speech"
+        ? "Cloud Speech-to-Text"
+        : apiSurface === "google_cloud_tts"
+          ? "Cloud Text-to-Speech"
+          : "unknown API surface";
   return `${model} (${surface})`;
 }
 
@@ -155,15 +157,12 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
   }, [feed]);
 
-  // Push-to-talk (real user report: "implement tap and hold to speak to
-  // avoid interruption and hence the queue problem" — automatic VAD-
-  // triggered barge-in was tied directly to a real server-side crash, see
-  // services/surgbot_service/main.py's _LIVE_RUN_CONFIG comment). The orb no
-  // longer toggles a listening state on click — pressing starts the
-  // session (first press) or a talking turn (subsequent presses);
-  // releasing ends the turn. Ending the SESSION entirely is a deliberately
-  // separate control (below) so it can never be triggered by the same
-  // gesture as talking.
+  // Push-to-talk: pressing starts the session (first press) or a talking
+  // turn (subsequent presses); releasing ends the turn — recording is sent
+  // as one whole clip through the classic STT -> LLM -> TTS pipeline
+  // (plan_v2 §15, services/surgbot_service/main.py). Ending the SESSION
+  // entirely is a deliberately separate control (below) so it can never be
+  // triggered by the same gesture as talking.
   function handleOrbPointerDown() {
     if (!open) {
       setOpen(true);
@@ -230,8 +229,12 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
               <h3 className="sb__card-title">Agents at work</h3>
               <ul className="sb__card-list">
                 <li>
+                  <span className="sb__card-item-name">Speech-to-Text</span>
+                  <span className="sb__card-item-meta">Cloud Speech (Chirp 3) · transcription</span>
+                </li>
+                <li>
                   <span className="sb__card-item-name">SurgBot Root</span>
-                  <span className="sb__card-item-meta">Gemini Live API · voice &amp; tool dispatch</span>
+                  <span className="sb__card-item-meta">Gemini 3.5 · tool dispatch &amp; reasoning</span>
                 </li>
                 <li>
                   <span className="sb__card-item-name">Error Chain Reviewer</span>
@@ -244,6 +247,10 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                 <li>
                   <span className="sb__card-item-name">Pattern Insight</span>
                   <span className="sb__card-item-meta">Gemini 3.5 · cross-session coaching</span>
+                </li>
+                <li>
+                  <span className="sb__card-item-name">Text-to-Speech</span>
+                  <span className="sb__card-item-meta">Cloud TTS (Chirp 3 HD) · voice synthesis</span>
                 </li>
               </ul>
             </div>
@@ -289,7 +296,7 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
         ) : (
           <div className="sb__chat" role="dialog" aria-label="SurgBot voice review">
             <div className="sb__banner" role="note">
-              Voice driven by Gemini Live API — reasoning engine and sub-agents use Gemini 3.5.
+              Voice via Cloud Speech-to-Text / Text-to-Speech (Chirp 3) — all reasoning runs on Gemini 3.5.
             </div>
 
             <div className="sb__status-row">
