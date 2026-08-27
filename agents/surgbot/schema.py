@@ -71,11 +71,65 @@ class ToolUseDisclosure(BaseModel):
 class ReviewFeedbackItem(BaseModel):
     phase: ReviewPhase
     case_id: str
-    subject_node_id: str
+    # Optional (plan_v2 §16.3): a case-grounded observation is anchored to a
+    # real graph node ("that divergence was a false positive"), but a
+    # standing directive is not ("prefer literature under 10 years old") —
+    # forcing a node id onto the latter would mean it could never be
+    # recorded at all. Empty string, not None, to match every other
+    # optional-but-always-present string field on this model.
+    subject_node_id: str = ""
     verdict: AgreementVerdict | None = None
     rationale: str = ""
     coaching_note: str = ""
     recorded_at: datetime = Field(default_factory=_now)
+
+
+# A reviewer's feedback is one of two genuinely different things, and
+# conflating them makes the read path wrong (plan_v2 §16.2):
+#   "directive"   — a standing preference that always applies, e.g. "prefer
+#                   literature under 10 years old". Few; injected in full.
+#   "observation" — a case-grounded judgment, e.g. "that divergence was a
+#                   false positive". Many; retrieved by similarity to the
+#                   situation actually at hand.
+# A directive crowded out of a top-k similarity ranking by unrelated
+# observations would silently stop applying, which is why these are stored
+# under separate Memory Bank scopes rather than one pool.
+FeedbackKind = Literal["directive", "observation"]
+
+
+class FeedbackRecord(BaseModel):
+    """The durable, auditable record of one piece of reviewer feedback.
+
+    Firestore (`surgbot_feedback/{feedback_id}`) is the system of record;
+    Memory Bank holds the same text as a retrievable fact. That dual-write is
+    deliberate, not redundant: Firestore is queryable, joinable back to the
+    case, and survives a Memory Bank outage; Memory Bank provides the managed
+    semantic retrieval Firestore has no equivalent for.
+
+    `reviewer_id` is the REAL reviewer — deliberately NOT the constant KB
+    user_id that agents/surgbot/feedback.py uses for the Memory Bank scope.
+    The KB is shared so anyone's review informs the pipeline; "who said this"
+    must still be recoverable from the record itself.
+    """
+
+    feedback_id: str
+    case_id: str
+    session_id: str
+    review_id: str
+    reviewer_id: str
+    subject_node_id: str = ""
+    node_type: str | None = None
+    target_agent: str | None = None  # None = unroutable; stored, never consumed
+    kind: FeedbackKind = "observation"
+    verdict: AgreementVerdict | None = None
+    rationale: str = ""
+    coaching_note: str = ""
+    fact: str = ""  # the exact string handed to Memory Bank
+    # Written to Firestore FIRST and always, so a Memory Bank failure is a
+    # visible, replayable state rather than feedback silently lost.
+    memory_written: bool = False
+    memory_error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
 
 
 class CaseReviewDocument(BaseModel):

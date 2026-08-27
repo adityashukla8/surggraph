@@ -43,6 +43,7 @@ from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent
 from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, divergence_detection as divergence_slice
+from tools.feedback_kb import feedback_block
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def _observations_after(index: GraphIndex, after_timestamp) -> list:
     )
 
 
-def _format_for_judgment(proposal, observations: list) -> str:
+def _format_for_judgment(proposal, observations: list, feedback: str = "") -> str:
     lines = [
         "PROPOSED CORRECTIVE PLAN",
         f"  {proposal.label}",
@@ -139,6 +140,12 @@ def _format_for_judgment(proposal, observations: list) -> str:
     for obs in observations:
         kind = obs.attrs.get("event_kind", "event")
         lines.append(f"  [{kind}] {obs.label}")
+
+    # plan_v2 §16.5 — advisory only, empty string when there's nothing to
+    # say (byte-identical to pre-feedback behavior; see feedback_block()'s
+    # own contract).
+    if feedback:
+        lines += ["", feedback]
     return "\n".join(lines)
 
 
@@ -190,9 +197,14 @@ async def check_proposal(case_id: str, proposal_node_id: str) -> str | None:
         return None
 
     # --- Semantic pass ----------------------------------------------------
+    # Fetched only here, never on the deterministic path above — the
+    # deterministic pass must stay free of any extra latency (plan_v2
+    # §16.5's explicit constraint on this exact function).
+    context_query = f"{proposal.label} " + " ".join(o.label for o in observations[-3:])
+    feedback = await feedback_block("divergence_detection", context_query)
     judgment: DivergenceJudgment = await run_llm_agent_once(
         AGENT,
-        types.Content(role="user", parts=[types.Part(text=_format_for_judgment(proposal, observations))]),
+        types.Content(role="user", parts=[types.Part(text=_format_for_judgment(proposal, observations, feedback))]),
         DivergenceJudgment,
         app_name="surggraph_divergence_detection",
     )

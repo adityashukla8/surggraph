@@ -1,8 +1,8 @@
-"""Deploys (or reuses) all three SurgBot TEXT reasoning subagents —
-error_chain_reviewer, synthesis, pattern_insight — to GEAP Agent Runtime,
-each as its OWN separate reasoning engine with identity_type=AGENT_IDENTITY,
-then smoke-tests each with a trivial real prompt and prints the real
-response.
+"""Deploys (or reuses) all four SurgBot TEXT reasoning subagents —
+error_chain_reviewer, synthesis, pattern_insight, feedback_router
+(plan_v2 §16.3) — to GEAP Agent Runtime, each as its OWN separate reasoning
+engine with identity_type=AGENT_IDENTITY, then smoke-tests each with a
+trivial real prompt and prints the real response.
 
 Real, empirically-confirmed architecture decision this session: a plain
 Gemini-3.5 tool-calling agent deployed with identity_type=AGENT_IDENTITY
@@ -51,6 +51,10 @@ _SMOKE_MESSAGES = {
         '"feedback_items": []}'
     ),
     "pattern_insight": '{"reviewer_id": "smoke-tester@example.com", "memories": []}',
+    "feedback_router": (
+        "Feedback text: Prefer literature published within the last 10 years.\n"
+        "Subject node type (if any): none\nVerdict given (if any): none"
+    ),
 }
 
 

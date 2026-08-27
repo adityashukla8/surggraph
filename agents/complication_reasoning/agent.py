@@ -37,6 +37,7 @@ from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent
 from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, complication_reasoning as complication_slice
+from tools.feedback_kb import feedback_block
 from tools.medgemma_model import fire_shadow_latency_call
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
@@ -60,12 +61,19 @@ def _as_content(text: str) -> types.Content:
     return types.Content(role="user", parts=[types.Part(text=text)])
 
 
-def _format_slice(slice_context: dict, retrieved: list[dict] | None = None) -> str:
+def _format_slice(slice_context: dict, retrieved: list[dict] | None = None, feedback: str = "") -> str:
     """Renders a context slice as prompt text.
 
     Prose rather than raw JSON: this goes into a clinical-reasoning prompt, and
     a readable rendering costs fewer tokens than a nested object while being
     easier for the model to actually use.
+
+    Called twice per error (query formulation, then reasoning) with two
+    DIFFERENT feedback blocks — see the two call sites in reason_about_
+    complications: the query-formulation call gets literature_retrieval's
+    feedback (e.g. a recency preference), the reasoning call gets
+    complication_reasoning's own (plan_v2 §16.5's explicit distinction; do
+    not collapse these into one shared block).
     """
     error = slice_context.get("triggering_error") or {}
     twin = slice_context.get("patient_twin") or {}
@@ -108,6 +116,10 @@ def _format_slice(slice_context: dict, retrieved: list[dict] | None = None) -> s
             if snippet:
                 lines.append(f"      {snippet[:500]}")
 
+    # plan_v2 §16.5 — advisory only, empty string when there's nothing to
+    # say (byte-identical to pre-feedback behavior).
+    if feedback:
+        lines += ["", feedback]
     return "\n".join(lines)
 
 
@@ -169,10 +181,18 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
     _seen.add(cache_key)
 
     slice_context = complication_slice(index, error_node_id)
+    error_for_query = slice_context.get("triggering_error") or {}
+    context_query = f"{error_for_query.get('label', '')} {error_for_query.get('attrs', {}).get('error_category', '')}".strip()
 
-    # Step 1 — the agent composes its own question.
+    # Step 1 — the agent composes its own question. literature_retrieval's
+    # feedback (e.g. a recency preference) belongs HERE, not in the
+    # reasoning call below — this is the query-formulation step.
+    query_feedback = await feedback_block("literature_retrieval", context_query)
     query_out: LiteratureQuery = await run_llm_agent_once(
-        QUERY_AGENT, _as_content(_format_slice(slice_context)), LiteratureQuery, app_name="surggraph_complication_query"
+        QUERY_AGENT,
+        _as_content(_format_slice(slice_context, feedback=query_feedback)),
+        LiteratureQuery,
+        app_name="surggraph_complication_query",
     )
     logger.info("complication[%s]: %d queries: %s", case_id, len(query_out.queries), query_out.queries)
 
@@ -181,8 +201,10 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
         case_id, query_out.queries, parent_node_id=error_node_id
     )
 
-    # Step 3 — reason over what actually came back.
-    reasoning_prompt = _format_slice(slice_context, retrieved=hits)
+    # Step 3 — reason over what actually came back. complication_reasoning's
+    # own feedback, distinct from the query-formulation block above.
+    reasoning_feedback = await feedback_block("complication_reasoning", context_query)
+    reasoning_prompt = _format_slice(slice_context, retrieved=hits, feedback=reasoning_feedback)
     # Real MedGemma-vs-Gemini latency comparison, real user request — shadow
     # only, fired in the background, never awaited: it must never add to or
     # break this real reasoning step, only observe it. No-op if

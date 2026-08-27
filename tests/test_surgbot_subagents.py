@@ -17,5 +17,8 @@ def test_surgbot_reasoning_subagents_still_follow_no_tools_convention():
         assert agent.output_schema is _OUTPUT_SCHEMAS[kind]
 
 
-def test_subagent_kinds_match_plan_14_1():
-    assert set(SUBAGENT_KINDS) == {"error_chain_reviewer", "synthesis", "pattern_insight"}
+def test_subagent_kinds_match_plan_14_1_and_16():
+    # error_chain_reviewer/synthesis/pattern_insight are plan_v2 §14.1's
+    # original three; feedback_router is plan_v2 §16.3's feedback
+    # classification subagent — real 4th kind, not a stray addition.
+    assert set(SUBAGENT_KINDS) == {"error_chain_reviewer", "synthesis", "pattern_insight", "feedback_router"}

@@ -65,8 +65,8 @@ logger = logging.getLogger(__name__)
 # inside every deployed sandbox, before the agent could ever serve traffic.
 # Deploy-only values are computed inside the functions that actually deploy,
 # never at import time.
-SubagentKind = Literal["error_chain_reviewer", "synthesis", "pattern_insight"]
-SUBAGENT_KINDS: tuple[SubagentKind, ...] = ("error_chain_reviewer", "synthesis", "pattern_insight")
+SubagentKind = Literal["error_chain_reviewer", "synthesis", "pattern_insight", "feedback_router"]
+SUBAGENT_KINDS: tuple[SubagentKind, ...] = ("error_chain_reviewer", "synthesis", "pattern_insight", "feedback_router")
 
 _DEPLOY_CACHE_PATH = Path(__file__).resolve().parent / ".deployed_subagents.json"
 
@@ -122,10 +122,32 @@ class PatternInsight(BaseModel):
     caveats: str = ""
 
 
+class FeedbackClassification(BaseModel):
+    """plan_v2 §16.3 step 3's single classification call — invoked only for
+    feedback that isn't already unambiguous by construction: a node-anchored
+    item WITH a verdict is always kind="observation" and routed by
+    agents/surgbot/feedback.py::target_agent_for, decided in code with no
+    LLM call. This subagent only ever sees the ambiguous remainder: free-text
+    guidance with no subject node (most standing directives), or a subject
+    node with no explicit verdict (e.g. a coaching note alone)."""
+
+    kind: Literal["directive", "observation"]
+    target_agent: Literal[
+        "divergence_detection",
+        "complication_reasoning",
+        "literature_retrieval",
+        "corrective_replanning",
+        "error_detection",
+        "none",
+    ]
+    reasoning: str = ""
+
+
 _OUTPUT_SCHEMAS: dict[SubagentKind, type[BaseModel]] = {
     "error_chain_reviewer": ErrorChainReview,
     "synthesis": SynthesisDraft,
     "pattern_insight": PatternInsight,
+    "feedback_router": FeedbackClassification,
 }
 
 _INSTRUCTIONS: dict[SubagentKind, str] = {
@@ -187,6 +209,30 @@ memories actually support the pattern you describe — never a number larger
 than the memories you were actually given. If the memories don't show any
 real recurring pattern, say so in pattern_summary rather than manufacturing
 one from a single data point.""",
+    "feedback_router": """You are the Feedback Router subagent for SurgBot. You are given one
+piece of reviewer feedback that could not be classified automatically —
+either it has no specific subject node (a general standing preference) or it
+has a subject node but no explicit agree/disagree/uncertain verdict (e.g. a
+coaching note with nothing else attached).
+
+Classify it as:
+- "directive": a standing preference or rule the reviewer wants applied
+  going forward, independent of any one case (e.g. "prefer literature
+  published in the last 10 years", "always flag needle-handling errors more
+  conservatively").
+- "observation": a judgment grounded in this specific case or finding, even
+  without an explicit verdict word (e.g. a coaching note about how one
+  specific error was handled).
+
+Then choose which SurgGraph agent this feedback is actually about:
+divergence_detection (corrective-plan divergence alerts), complication_reasoning
+(reasoned complications), literature_retrieval (how literature search queries
+are formed, or which literature is preferred), corrective_replanning (which
+corrective actions get proposed), error_detection (the underlying error
+detectors), or "none" if you genuinely cannot tell from the text given.
+
+Base your answer only on the feedback text you were given — never invent
+case context that wasn't included in it.""",
 }
 
 

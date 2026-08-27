@@ -50,10 +50,11 @@ from typing import Any
 
 from google.adk.agents import Agent
 
-from agents.surgbot import case_index, memory_bank, slices, store, subagents
+from agents.surgbot import case_index, feedback, slices, store, subagents
 from agents.surgbot.graph_reader import build_index, get_case_indexes
 from agents.surgbot.model_armor import screen_review_document
 from agents.surgbot.schema import CaseReviewDocument, ReviewFeedbackItem
+from tools import memory_bank
 from tools.gemini_model import GEMINI_MODEL, new_agent_model
 
 # Same real bug found in services/surgbot_service/main.py this session,
@@ -241,7 +242,7 @@ async def record_feedback(
     session_id: str,
     phase: int,
     case_id: str,
-    subject_node_id: str,
+    subject_node_id: str = "",
     verdict: str = "",
     rationale: str = "",
     coaching_note: str = "",
@@ -250,7 +251,12 @@ async def record_feedback(
     session — the mechanism that makes this a genuine Track 2 "captures
     feedback so it constantly adapts" agent rather than a read-only tour.
     verdict must be "agree", "disagree", "uncertain", or "" (no verdict given
-    yet, e.g. a coaching note with nothing to agree/disagree with)."""
+    yet, e.g. a coaching note with nothing to agree/disagree with).
+    subject_node_id may be omitted for a standing preference that is not
+    about one specific finding (e.g. "prefer literature under 10 years
+    old") — plan_v2 §16's feedback knowledge base treats an item with a real
+    subject_node_id AND a verdict as a case-grounded observation, and
+    everything else as a candidate standing directive."""
     normalized_verdict = verdict if verdict in ("agree", "disagree", "uncertain") else None
     item = ReviewFeedbackItem(
         phase=phase,  # type: ignore[arg-type]  # validated by ReviewFeedbackItem's own Literal
@@ -337,22 +343,29 @@ async def draft_review_document(session_id: str) -> dict[str, Any]:
 
 
 async def retrieve_reviewer_patterns(reviewer_id: str) -> dict[str, Any]:
-    """Phase 6 (cross-session pattern review): retrieves this reviewer's real
-    Memory Bank facts from past SurgBot sessions and dispatches them to the
+    """Phase 6 (cross-session pattern review): retrieves real Memory Bank
+    facts from past SurgBot review sessions and dispatches them to the
     deployed pattern_insight subagent for an honest cross-session framing —
     an empty memory history renders as "no prior history yet", never a
     fabricated pattern claim (plan §14.6's cut-order explicitly calls this
     out: degrade to single-session stats before ever asserting unsupported
-    cross-session claims)."""
+    cross-session claims).
+
+    Scoped by feedback.REVIEW_SUMMARY_SCOPE (plan_v2 §16.1c), not a
+    per-reviewer scope: institution-wide by the same constant-scope
+    reasoning as the rest of the feedback KB, so any reviewer — not just
+    whoever has run the most sessions — sees real pattern history.
+    reviewer_id is kept as this tool's argument for provenance/logging and
+    API-shape stability, not as a Memory Bank scope key."""
     # Both deploy_or_get_subagent() and memory_bank.retrieve_memories() are
     # plain synchronous, blocking network calls — same event-loop-freezing
     # bug fixed elsewhere in this file this session. Run both in a thread.
     synthesis_engine = await asyncio.to_thread(subagents.deploy_or_get_subagent, "synthesis")
     facts = await asyncio.to_thread(
         memory_bank.retrieve_memories,
-        reviewer_id,
-        query="review session patterns",
-        agent_engine=synthesis_engine.api_resource.name,
+        feedback.REVIEW_SUMMARY_SCOPE,
+        synthesis_engine.api_resource.name,
+        "review session patterns",
     )
     payload = {"reviewer_id": reviewer_id, "memories": facts}
     result = await subagents.invoke_subagent("pattern_insight", json.dumps(payload))
@@ -465,6 +478,14 @@ GENERAL RULES:
 - Every piece of reviewer feedback (agreement, disagreement, coaching note)
   should be captured via record_feedback as it's given, not just summarized
   at the end.
+- If the reviewer states a standing preference for how SurgGraph should
+  behave going forward — not about the specific finding on screen, e.g.
+  "prefer literature published in the last 10 years" or "be more
+  conservative about needle-handling errors" — call record_feedback for it
+  too, with subject_node_id omitted (it isn't about one node) and the
+  preference itself in rationale or coaching_note. On review approval this
+  becomes a standing directive later agents actually consult, not just a
+  note in the summary.
 - record_feedback and draft_review_document both require the exact
   session_id from the "[context: session_id=...]" tag at the very start of
   this conversation — always pass that same value, never a case_id,

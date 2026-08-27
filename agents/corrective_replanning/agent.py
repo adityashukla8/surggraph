@@ -40,6 +40,7 @@ from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent
 from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, corrective_replanning as replanning_slice
+from tools.feedback_kb import feedback_block
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ AGENT = build_subagent()
 _seen: set[tuple[str, str]] = set()
 
 
-def _format_slice(slice_context: dict, category: str) -> str:
+def _format_slice(slice_context: dict, category: str, feedback: str = "") -> str:
     complication = slice_context.get("triggering_complication") or {}
     errors = slice_context.get("root_errors") or []
     literature = slice_context.get("supporting_literature") or []
@@ -105,6 +106,10 @@ def _format_slice(slice_context: dict, category: str) -> str:
         f"AVAILABLE CORRECTIVE ACTIONS for category '{category}' — SELECT BY action_id ONLY:",
         library.format_for_prompt(category),
     ]
+    # plan_v2 §16.5 — advisory only, empty string when there's nothing to
+    # say (byte-identical to pre-feedback behavior).
+    if feedback:
+        lines += ["", feedback]
     return "\n".join(lines)
 
 
@@ -133,7 +138,9 @@ async def propose_for_complication(case_id: str, complication_node_id: str) -> l
         logger.warning("corrective[%s]: root error %s has no category", case_id, root_error_id)
         return []
 
-    prompt = _format_slice(slice_context, category)
+    context_query = f"{complication.label} {category}"
+    feedback = await feedback_block("corrective_replanning", context_query)
+    prompt = _format_slice(slice_context, category, feedback=feedback)
     proposal: CorrectiveProposal = await run_llm_agent_once(
         AGENT,
         types.Content(role="user", parts=[types.Part(text=prompt)]),

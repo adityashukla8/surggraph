@@ -73,9 +73,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from agents.surgbot import case_index, memory_bank, speech, store, subagents
+from agents.surgbot import case_index, feedback, speech, store, subagents
 from agents.surgbot.root_agent import TOOL_DISCLOSURE, TOOL_PHASE_MAP
 from agents.surgbot.schema import PHASE_LABELS, SurgBotSession
+from tools import memory_bank
 from tools.gemini_model import GEMINI_MODEL
 from tools.observability import setup_cloud_observability
 
@@ -183,33 +184,46 @@ async def post_review_approval(review_id: str, payload: ApprovalRequest) -> dict
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Phase 5 approval also writes to Memory Bank — real product value for
-    # Phase 6's cross-session pattern review, never a parked/best-effort
-    # afterthought that silently swallows a real failure: memory_bank.
-    # create_memory already fails soft internally (returns None, logs) so
-    # this endpoint's own response never depends on Memory Bank succeeding.
+    # Approval is the ONLY point feedback becomes knowledge (plan_v2 §16.3) —
+    # unapproved/draft feedback never reaches Memory Bank. This replaces the
+    # old single-flat-string write with feedback.process_review_feedback,
+    # which routes each item to its real target agent individually; that
+    # function already fails soft per-item (a Memory Bank failure is
+    # recorded on the FeedbackRecord, never raised), so this endpoint's own
+    # response never depends on it succeeding.
+    #
+    # Also writes ONE review_summary fact under feedback.REVIEW_SUMMARY_SCOPE
+    # to preserve Phase 6's existing cross-session pattern review — moved off
+    # a per-reviewer scope onto the same institution-wide constant used
+    # everywhere else in this feature, so Phase 6 reflects every reviewer's
+    # approved sessions, not just whichever reviewer has run the most.
     if result["outcome"] in ("approved", "edited"):
         document = await store.get_review(review_id)
         if document is not None:
+            await feedback.process_review_feedback(document)
+
             fact_parts = [document.case_summary, *document.coaching_notes, *document.disagreements]
-            fact = " ".join(p for p in fact_parts if p)[:1000]
-            if fact:
-                # _synthesis_resource_name() and memory_bank.create_memory()
-                # are both plain synchronous, blocking network calls — same
-                # shared-event-loop-freezing bug as get_cases() above. Run
-                # the whole chain in one thread.
-                await asyncio.to_thread(
-                    lambda: memory_bank.create_memory(document.reviewer_id, fact, agent_engine=_synthesis_resource_name())
-                )
+            summary_fact = " ".join(p for p in fact_parts if p)[:1000]
+            if summary_fact:
+                # _synthesis_resource_name() is a plain blocking call — must
+                # be resolved INSIDE the worker thread, not as an eagerly-
+                # evaluated positional arg (that would block this coroutine's
+                # own event loop before to_thread ever schedules anything).
+                agent_engine = await asyncio.to_thread(_synthesis_resource_name)
+                await asyncio.to_thread(memory_bank.create_memory, summary_fact, feedback.REVIEW_SUMMARY_SCOPE, agent_engine)
 
     return result
 
 
 @app.get("/surgbot/reviewers/{reviewer_id}/patterns")
 async def get_reviewer_patterns(reviewer_id: str, query: str = "review session patterns") -> dict[str, Any]:
-    facts = await asyncio.to_thread(
-        lambda: memory_bank.retrieve_memories(reviewer_id, query=query, agent_engine=_synthesis_resource_name())
-    )
+    # reviewer_id stays in the URL/response for API-shape compatibility and
+    # provenance in logs, but no longer scopes the Memory Bank query itself —
+    # see feedback.REVIEW_SUMMARY_SCOPE's docstring (plan_v2 §16.1c): a
+    # per-reviewer scope meant any reviewer besides the heaviest user saw an
+    # empty pattern history.
+    agent_engine = await asyncio.to_thread(_synthesis_resource_name)
+    facts = await asyncio.to_thread(memory_bank.retrieve_memories, feedback.REVIEW_SUMMARY_SCOPE, agent_engine, query)
     return {"reviewer_id": reviewer_id, "memories": facts, "count": len(facts)}
 
 

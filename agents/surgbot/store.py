@@ -26,12 +26,13 @@ from datetime import datetime, timezone
 
 from google.cloud.firestore_v1.async_client import AsyncClient
 
-from agents.surgbot.schema import CaseReviewDocument, ReviewFeedbackItem, SurgBotSession
+from agents.surgbot.schema import CaseReviewDocument, FeedbackRecord, ReviewFeedbackItem, SurgBotSession
 
 logger = logging.getLogger(__name__)
 
 _REVIEWS_COLLECTION = "surgbot_reviews"
 _SESSIONS_COLLECTION = "surgbot_sessions"
+_FEEDBACK_COLLECTION = "surgbot_feedback"
 
 _async_client: AsyncClient | None = None
 
@@ -168,3 +169,36 @@ async def record_review_approval(
     await save_review_draft(updated)
     logger.info("surgbot store: review %s %s", review_id, outcome)
     return {"review_id": review_id, "outcome": outcome, "approval_status": status}
+
+
+# --- Feedback knowledge base (plan_v2 §16) -------------------------------------
+#
+# Firestore is the system of record for feedback; agents/surgbot/feedback.py
+# writes the same fact to Memory Bank as the retrievable index. One doc per
+# feedback item (not an inline array like sessions' feedback_items) because
+# this collection needs to be queryable on its own — by target_agent, by
+# case, for a future review UI — independent of any one session or review.
+
+
+async def save_feedback_record(record: FeedbackRecord) -> None:
+    client = _get_async_client()
+    await client.collection(_FEEDBACK_COLLECTION).document(record.feedback_id).set(
+        record.model_dump(mode="json")
+    )
+
+
+async def get_feedback_record(feedback_id: str) -> FeedbackRecord | None:
+    client = _get_async_client()
+    doc = await client.collection(_FEEDBACK_COLLECTION).document(feedback_id).get()
+    if not doc.exists:
+        return None
+    return FeedbackRecord.model_validate(doc.to_dict())
+
+
+async def list_feedback_for_review(review_id: str) -> list[FeedbackRecord]:
+    """Used by tests/verification scripts to read back what a given review's
+    approval actually wrote — not on any hot path."""
+    client = _get_async_client()
+    query = client.collection(_FEEDBACK_COLLECTION).where("review_id", "==", review_id)
+    docs = [doc async for doc in query.stream()]
+    return [FeedbackRecord.model_validate(doc.to_dict()) for doc in docs]
