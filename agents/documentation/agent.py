@@ -28,14 +28,11 @@ from __future__ import annotations
 
 import logging
 
-from google.genai import types
-
-from agents.documentation.subagent import OperativeNoteDraft, build_subagent
+from agents.documentation.subagent import _INSTRUCTION, OperativeNoteDraft
 from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
-from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, documentation as documentation_slice
-from tools.medgemma_model import fire_shadow_latency_call
+from tools.medgemma_model import MEDGEMMA_MODEL_ID, generate_structured
 from tools.model_armor import join_note_sections, screen_operative_note
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
@@ -43,8 +40,6 @@ logger = logging.getLogger(__name__)
 
 SOURCE_AGENT = "documentation"
 _SOURCE_TOOL = "draft_operative_note"
-
-AGENT = build_subagent()
 
 
 def _format_case(slice_context: dict, index: GraphIndex) -> str:
@@ -198,16 +193,17 @@ async def draft_note(case_id: str) -> str | None:
     )
 
     prompt = _format_case(slice_context, index)
-    # Real MedGemma-vs-Gemini latency comparison, real user request — shadow
-    # only, fired in the background, never awaited: it must never add to or
-    # break this real drafting step, only observe it. No-op if
-    # MEDGEMMA_ENDPOINT_ID isn't set.
-    fire_shadow_latency_call(f"documentation:{case_id}", prompt)
-    draft: OperativeNoteDraft = await run_llm_agent_once(
-        AGENT,
-        types.Content(role="user", parts=[types.Part(text=prompt)]),
+    # MedGemma writes the operative record — the medical-domain model owns the
+    # medical-writing step, and this is the artifact that reaches a real EHR.
+    # Deliberately NO Gemini fallback (tools/medgemma_model.py): a failure
+    # here surfaces as a real failure rather than silently substituting a
+    # general model's prose for a medical model's, which would make the
+    # provenance recorded on the node below untrue.
+    draft: OperativeNoteDraft = await generate_structured(
+        f"documentation:{case_id}",
+        _INSTRUCTION,
+        prompt,
         OperativeNoteDraft,
-        app_name="surggraph_documentation",
     )
     sections = draft.model_dump()
 
@@ -295,6 +291,12 @@ async def draft_note(case_id: str) -> str | None:
                         "approval_status": "blocked" if screen.blocked else "pending",
                         "sections": sections,
                         "model_armor_reason": screen.reason,
+                        # Real provenance: this record is written by the
+                        # medical-domain model, not the general one used
+                        # elsewhere in the pipeline. Recorded on the node so
+                        # the claim is checkable in the graph rather than only
+                        # asserted in a README.
+                        "drafted_by_model": MEDGEMMA_MODEL_ID,
                         # Carried so nothing downstream can present the draft as
                         # more settled than it is.
                         "synthetic_patient": True,

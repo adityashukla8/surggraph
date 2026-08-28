@@ -38,7 +38,6 @@ from state.schema import GraphEdgePatch, GraphNodePatch, StateDiffEvent
 from tools.adk_runner import run_llm_agent_once
 from tools.context_slice import GraphIndex, complication_reasoning as complication_slice
 from tools.feedback_kb import feedback_block
-from tools.medgemma_model import fire_shadow_latency_call
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
 logger = logging.getLogger(__name__)
@@ -205,11 +204,6 @@ async def reason_about_error(case_id: str, error_node_id: str) -> list[str]:
     # own feedback, distinct from the query-formulation block above.
     reasoning_feedback = await feedback_block("complication_reasoning", context_query)
     reasoning_prompt = _format_slice(slice_context, retrieved=hits, feedback=reasoning_feedback)
-    # Real MedGemma-vs-Gemini latency comparison, real user request — shadow
-    # only, fired in the background, never awaited: it must never add to or
-    # break this real reasoning step, only observe it. No-op if
-    # MEDGEMMA_ENDPOINT_ID isn't set.
-    fire_shadow_latency_call(f"complication_reasoning:{error_node_id}", reasoning_prompt)
     assessment: ComplicationAssessment = await run_llm_agent_once(
         REASONING_AGENT,
         _as_content(reasoning_prompt),
