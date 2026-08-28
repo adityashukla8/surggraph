@@ -56,7 +56,7 @@ const CARDS: SolutionCard[] = [
   {
     key: "loop",
     num: "03",
-    name: "The Learning Loop",
+    name: "The Feedback Layer",
     title: "Closes the Circuit",
     bullets: [
       "Approved feedback is routed and stored as retrievable knowledge",

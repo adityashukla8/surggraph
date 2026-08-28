@@ -1,8 +1,16 @@
+const STATEMENTS = [
+  "Surgical errors compound into complications.",
+  "Complications impact patient outcomes.",
+  "Documentation trails days behind the case that needed it.",
+  "Feedback from one case rarely reaches the next.",
+];
+
 interface ProblemCard {
   icon: string;
   label: string;
   title: string;
   body: React.ReactNode;
+  benefitHeader: string;
   pairing: string;
   citationLabel: string;
   citationHref: string;
@@ -19,6 +27,7 @@ const CARDS: ProblemCard[] = [
         complication — versus <b>12%</b> with none. One missed step rarely stays contained to the moment it happens.
       </>
     ),
+    benefitHeader: "Turns hours-later review into real-time detection",
     pairing: "SurgGraph flags the technique error live, in the window it happens — not hours later in a post-op chart review.",
     citationLabel: "Gawria et al., 2023 · PMC10095268",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/",
@@ -33,6 +42,7 @@ const CARDS: ProblemCard[] = [
         Complications aren't rare edge cases; they're a routine part of the risk every case carries.
       </>
     ),
+    benefitHeader: "Turns a one-time checklist into continuous reasoning",
     pairing: "SurgGraph reasons about complication risk continuously — against the patient's own anatomy and live literature, not a one-time pre-op checklist.",
     citationLabel: "Tevis et al., 2016 · Annals of Surgery · PMC6214627",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/",
@@ -48,6 +58,7 @@ const CARDS: ProblemCard[] = [
         clinician relies on is routinely two weeks stale.
       </>
     ),
+    benefitHeader: "Turns a 15-day wait into minutes",
     pairing: "SurgGraph drafts the note automatically at case close — turning a 15-day wait into minutes.",
     citationLabel: "Laflamme et al., 2005 · PMC1560865",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/",
@@ -62,6 +73,7 @@ const CARDS: ProblemCard[] = [
         98 real trials is just <b>4.4 percentage points</b>. Lessons from one case routinely never reach the next.
       </>
     ),
+    benefitHeader: "Turns one case's feedback into knowledge for every case",
     pairing: "SurgOS's Learning Loop routes every surgeon's feedback into knowledge which SurgGraph's agents automatically consult.",
     citationLabel: "Ivers et al., 2014 · J Gen Intern Med · PMC4238192",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/",
@@ -71,25 +83,26 @@ const CARDS: ProblemCard[] = [
 export function ProblemSection() {
   return (
     <section className="home__section" id="problem">
-      <div className="home__problem-intro">
-        <div>
-          <span className="home__eyebrow">The Problem</span>
-          <h2 className="home__headline" style={{ fontSize: 34, maxWidth: 620 }}>
-            Surgical errors compound into complications.
-            <br />
-            <br></br>
-            Complications impact patient outcomes.
-            <br />
-            <br></br>
-            Documentation trails days behind the case that needed it.
-            <br />
-            <br></br>
-            Feedback from one case rarely reaches the next.
-          </h2>
-        </div>
+      <span className="home__eyebrow">The Problem</span>
+      <div className="home__problem-cascade">
+        {STATEMENTS.map((s, i) => (
+          <div className="home__problem-cascade-step" key={s}>
+            <div className="home__problem-statement-card">
+              <span className="home__problem-statement-num">0{i + 1}</span>
+              <p className="home__problem-statement-text">{s}</p>
+            </div>
+            {i < STATEMENTS.length - 1 && (
+              <span className="home__problem-cascade-arrow" aria-hidden="true">
+                →
+              </span>
+            )}
+          </div>
+        ))}
       </div>
 
-      <span className="home__eyebrow">Challenges SurgOS addresses</span>
+      <span className="home__eyebrow" style={{ marginTop: 56, display: "block" }}>
+        Challenges SurgOS addresses
+      </span>
       <div className="home__problem-grid">
         {CARDS.map((c) => (
           <div className="home__card" key={c.title}>
@@ -102,7 +115,10 @@ export function ProblemSection() {
             <h3 className="home__card-title">{c.title}</h3>
             <div className="home__card-body">{c.body}</div>
             <hr className="home__card-divider" />
-            <div className="home__card-pairing">→ {c.pairing}</div>
+            <div className="home__card-pairing">
+              <span className="home__card-pairing-header">{c.benefitHeader}</span>
+              → {c.pairing}
+            </div>
             <a href={c.citationHref} target="_blank" rel="noreferrer" className="home__card-citation">
               ↗ {c.citationLabel}
             </a>
