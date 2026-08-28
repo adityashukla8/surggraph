@@ -246,10 +246,12 @@
 }
 .home__hero-flow-list li {
   font-size: 14.5px;
-  font-weight: 600;
-  color: var(--home-text);
+  font-weight: 400;
+  color: var(--home-text-secondary);
+  line-height: 1.5;
 }
 .home__hero-flow-list li::marker { color: var(--home-accent); font-size: 1.1em; }
+.home__hero-flow-list b { color: var(--home-accent-dark); font-weight: 700; }
 
 .home__hero-visual-caption {
   display: flex;
@@ -435,7 +437,7 @@
 
 .home__problem-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 22px;
 }
 @media (max-width: 900px) {
@@ -501,8 +503,12 @@
 
 .home__card-pairing {
   font-size: 13px;
+  font-weight: 600;
   line-height: 1.55;
   color: var(--home-accent-dark);
+  background: var(--home-accent-tint);
+  border-radius: 10px;
+  padding: 12px 14px;
 }
 
 .home__card-citation {
@@ -516,14 +522,152 @@
 }
 .home__card-citation:hover { color: var(--home-accent); }
 
-/* ------------------------------------------------------- How it works */
+/* ---------------------------------------------------------- Solution */
 
-.home__hiw-headline-row {
+.home__solution-diagram {
+  display: grid;
+  grid-template-columns: 40px 1fr 28px 1fr;
+  grid-template-rows: auto auto auto;
+  grid-template-areas:
+    "gutter card1 harrow card2"
+    "gutter .     .      varrow"
+    "gutter bottom bottom bottom";
+  column-gap: 18px;
+  margin-top: 40px;
+}
+@media (max-width: 720px) {
+  .home__solution-diagram {
+    grid-template-columns: 1fr;
+    grid-template-areas: "card1" "harrow" "card2" "varrow" "bottom";
+  }
+  .home__solution-loop-gutter { display: none; }
+}
+
+.home__solution-arrow {
+  color: var(--home-text-muted);
+  font-weight: 700;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-bottom: 10px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.home__solution-arrow--h { grid-area: harrow; font-size: 26px; }
+@media (max-width: 720px) { .home__solution-arrow--h { transform: rotate(90deg); padding: 6px 0; } }
+.home__solution-arrow--v { grid-area: varrow; font-size: 22px; padding: 4px 0; justify-self: center; }
+
+.home__solution-loop-gutter {
+  grid-area: gutter;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+.home__solution-loop-arrowhead { color: var(--home-accent); font-size: 13px; line-height: 1; }
+.home__solution-loop-line {
+  flex: 1;
+  width: 2px;
+  min-height: 40px;
+  background: repeating-linear-gradient(to bottom, var(--home-accent) 0 4px, transparent 4px 8px);
+  margin: 2px 0;
+}
+.home__solution-loop-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--home-accent);
+  white-space: nowrap;
+  padding: 6px 0;
+}
+
+.home__solution-card {
+  flex: 1;
+  min-width: 0;
+  background: #fff;
+  border: 1px solid var(--home-border);
+  border-radius: 16px;
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s;
+}
+.home__solution-card:hover { border-color: var(--home-accent); }
+.home__solution-card--wide { grid-area: bottom; }
+
+.home__solution-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.home__solution-card-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--home-surface);
+  border: 1px solid var(--home-border);
+  color: var(--home-text-secondary);
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.home__solution-card:hover .home__solution-card-icon {
+  color: var(--home-accent);
+  border-color: var(--home-accent);
+}
+
+.home__solution-card-num {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--home-border);
+  color: var(--home-accent);
+}
+
+.home__solution-card-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--home-text);
+  margin: 0 0 4px;
+}
+
+.home__solution-card-subtitle {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--home-accent);
+  margin-bottom: 12px;
+}
+
+.home__solution-card-bullets {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.home__solution-card-bullets li {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--home-text-secondary);
+}
+.home__solution-card-bullets li::marker { color: var(--home-text-muted); }
+
+/* ------------------------------------------------------- How it works */
+
+.home__hiw-layer-label {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--home-text-secondary);
+  margin: 0 0 10px;
 }
 
 .home__hiw-subheading {
@@ -533,17 +677,6 @@
   text-transform: uppercase;
   color: var(--home-accent);
   margin: 0 0 34px;
-}
-.home__hiw-icon-badge {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--home-accent-tint);
-  color: var(--home-accent-dark);
-  flex-shrink: 0;
 }
 
 .home__pipeline-card {

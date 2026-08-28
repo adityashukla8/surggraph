@@ -4,15 +4,15 @@ const TECH = [
   { logo: <img src="/tech-logos/gemin.png" alt="Gemini" />, name: "Gemini 3.5", desc: "Vertex AI · global endpoint, every reasoning call" },
   {
     // Unlike every other entry's square icon mark, the real MedGemma asset is
-    // a wide wordmark (666x374) — forcing it into the shared 22x22 icon
+    // a wide wordmark (666x374) - forcing it into the shared 22x22 icon
     // slot crushed it down to an illegible sliver, so this one gets its own
     // wider box sized to its real aspect ratio instead.
     logo: <img src="/tech-logos/medgemma.png" alt="MedGemma" style={{ width: 90, height: "auto" }} />,
     name: "MedGemma",
-    desc: "Self-deployed 4B model —  for surgical Complication Reasoning & Clinical Documentation",
+    desc: "Vertex AI hosted 4B model -  for surgical Complication Reasoning & Clinical Documentation",
     wideIcon: true,
   },
-  { logo: <img src="/tech-logos/vertexai.png" alt="Vertex AI" />, name: "Vertex AI", desc: "Model serving & endpoints — hosts every Gemini and MedGemma call" },
+  { logo: <img src="/tech-logos/vertexai.png" alt="Vertex AI" />, name: "Vertex AI", desc: "Model serving & endpoints - hosts every Gemini and MedGemma call" },
   {
     logo: <img src="/tech-logos/gemin.png" alt="Gemini" />,
     name: "Gemini Enterprise Agent Platform",
@@ -20,7 +20,7 @@ const TECH = [
   },
   { logo: <img src="/tech-logos/modelarmor.png" alt="Model Armor" />, name: "Model Armor", desc: "Content-safety gate on the outbound FHIR write" },
   { logo: <img src="/tech-logos/cloudrun.png" alt="Cloud Run" />, name: "Cloud Run", desc: "State service, orchestrator service, this frontend" },
-  { logo: <img src="/tech-logos/cloudbuild.png" alt="Cloud Build" />, name: "Cloud Build", desc: "CI/CD — builds and deploys every Cloud Run service" },
+  { logo: <img src="/tech-logos/cloudbuild.png" alt="Cloud Build" />, name: "Cloud Build", desc: "CI/CD - builds and deploys every Cloud Run service" },
   { logo: <img src="/tech-logos/firestore.png" alt="Firestore" />, name: "Firestore", desc: "Multi-tenant, per-case-isolated Living State Graph" },
   { logo: <FhirLogo />, name: "HAPI FHIR", desc: "Real DocumentReference + Communication writes" },
   { logo: <FastApiLogo />, name: "FastAPI + SSE", desc: "Streams every graph patch live, no polling" },

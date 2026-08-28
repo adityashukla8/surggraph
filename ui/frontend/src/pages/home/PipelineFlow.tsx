@@ -184,10 +184,10 @@ const edges: Edge[] = [
   { id: "e-graph-fhir", source: "graph", target: "fhir", animated: true, style: dashed, markerEnd: arrow },
 ];
 
-export function PipelineFlow() {
+export function PipelineFlow({ height = 700 }: { height?: number }) {
   const fitViewOptions = useMemo(() => ({ padding: 0.08 }), []);
   return (
-    <div style={{ position: "relative", height: 700, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
+    <div style={{ position: "relative", height, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
       <span className="home__flow-tag">Powered by Vertex AI + Cloud Run</span>
       <ReactFlow
         nodes={nodes}

@@ -72,7 +72,7 @@ const STEPS: {
   },
 ];
 
-const STEP_MS = 3200;
+const STEP_MS = 4000;
 
 export function HeroGraph() {
   const [step, setStep] = useState(0);

@@ -47,12 +47,11 @@ const STEPS: StepCard[] = [
 export function HowItWorksSection() {
   return (
     <section className="home__section" id="how-it-works">
-      <div className="home__hiw-headline-row">
-        <span className="home__hiw-icon-badge">◎</span>
-        <h2 className="home__headline" style={{ fontSize: 38, margin: 0 }}>
-          Perceive. Reason. Act. Verify.
-        </h2>
-      </div>
+      <span className="home__eyebrow">SurgGraph</span>
+      <h2 className="home__headline" style={{ fontSize: 38, margin: "0 0 8px" }}>
+        The Autonomous Workflow
+      </h2>
+      {/* <p className="home__hiw-layer-label">Core TaskMaster Track Submission</p> */}
       <p className="home__hiw-subheading">Core TaskMaster Track Submission</p>
 
       <div className="home__pipeline-card">

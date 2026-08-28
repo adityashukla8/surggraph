@@ -9,72 +9,67 @@ interface ProblemCard {
   citationHref: string;
 }
 
-const EXAMPLE_STEPS = [
-  {
-    label: "Surgical Error",
-    color: "var(--home-red)",
-    text: "Needle lost during vesicourethral anastomosis, pulled through a 12mm trocar without visualization",
-  },
-  {
-    label: "Complication",
-    color: "var(--home-red)",
-    text: "Retained surgical needle in the abdominal cavity — risk of chronic pain, bowel or vascular injury",
-  },
-  {
-    label: "Patient Outcome",
-    color: "var(--home-yellow)",
-    text: "~10-minute laparoscopic search located the needle on the abdominal wall; retrieved, no post-op complications",
-  },
-];
-
 const CARDS: ProblemCard[] = [
   {
     color: "var(--home-accent)",
-    icon: "⚠",
+    icon: "/icons/error.png",
     label: "Technique Errors",
     title: "One missed step, a cascading complication",
     body: (
       <>
-        In a nationwide study of abdominal surgery, patients who had an intraoperative adverse event went on to
-        develop a Grade II-or-higher postoperative complication <b>26.4% of the time</b> — versus <b>12%</b> for
-        patients whose case had none. The error doesn't stay contained to the moment it happens.
+        <b>26.4%</b> of patients with an intraoperative adverse event go on to develop a Grade II-or-higher
+        complication — versus <b>12%</b> with none. One missed step rarely stays contained to the moment it happens.
       </>
     ),
-    pairing: "SurgGraph's Error Detection agent catches the technique error live, in the window it happens.",
+    pairing: "SurgGraph flags the technique error live, in the window it happens — not hours later in a post-op chart review.",
     citationLabel: "Gawria et al., 2023 · PMC10095268",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/",
   },
   {
     color: "var(--home-accent)",
-    icon: "◈",
+    icon: "/icons/complication.png",
     label: "Complication Risk",
     title: "Complications are common, and hard to see coming",
     body: (
       <>
-        Across 7 studies and 4,122 radical prostatectomy patients — robot-assisted procedures included — larger,
-        more technically demanding anatomy saw complications in <b>17%</b> of cases, versus <b>10%</b> for
-        lower-risk anatomy. The risk is real and it's specific to the patient in front of you, not a generic average.
+        <b>15%</b> of general surgery patients develop at least one complication — <b>6%</b> develop more than one.
+        Complications aren't rare edge cases; they're a routine part of the risk every case carries.
       </>
     ),
-    pairing: "SurgGraph reasons about complication risk from the patient's own anatomy, live, against literature.",
-    citationLabel: "Fahmy et al., 2021 · PMC8656835",
-    citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC8656835/",
+    pairing: "SurgGraph reasons about complication risk continuously — against the patient's own anatomy and live literature, not a one-time pre-op checklist.",
+    citationLabel: "Tevis et al., 2016 · Annals of Surgery · PMC6214627",
+    citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/",
   },
   {
     color: "var(--home-accent)",
-    icon: "▤",
+    icon: "/icons/documentation.png",
     label: "Documentation Lag",
     title: "The record arrives long after the case is over",
     body: (
       <>
-        Dictated operative reports took a mean of <b>374 hours — over 15 days</b> — to reach a verified, signed
-        state, against <b>28 minutes</b> for structured, template-driven notes. The clinical record that other
-        clinicians rely on is routinely two weeks out of date.
+        <b>374 hours — over 15 days</b> is the average time a dictated operative report takes to reach a verified,
+        signed state, versus <b>28 minutes</b> for a structured, template-driven note. The record every other
+        clinician relies on is routinely two weeks stale.
       </>
     ),
-    pairing: "SurgGraph drafts the operative note as a byproduct of reasoning that already happened, at case close.",
+    pairing: "SurgGraph drafts the note automatically at case close — turning a 15-day wait into minutes.",
     citationLabel: "Laflamme et al., 2005 · PMC1560865",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/",
+  },
+  {
+    color: "var(--home-accent)",
+    icon: "/icons/feedback-loop.svg",
+    label: "Feedback Loop Failure",
+    title: "Feedback rarely changes the next case",
+    body: (
+      <>
+        <b>28%</b> of clinician feedback interventions improve care quality by 10% or more — the median gain across
+        98 real trials is just <b>4.4 percentage points</b>. Lessons from one case routinely never reach the next.
+      </>
+    ),
+    pairing: "SurgOS's Learning Loop routes every reviewed case's feedback into knowledge SurgGraph's agents automatically consult — not another initiative hoping to be noticed.",
+    citationLabel: "Ivers et al., 2014 · J Gen Intern Med · PMC4238192",
+    citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/",
   },
 ];
 
@@ -92,28 +87,10 @@ export function ProblemSection() {
             <br />
             <br></br>
             Documentation trails days behind the case that needed it.
+            <br />
+            <br></br>
+            Feedback from one case rarely reaches the next.
           </h2>
-        </div>
-
-        <div className="home__example-flow">
-          <span className="home__example-flow-eyebrow">A real, published case</span>
-          {EXAMPLE_STEPS.map((s, i, arr) => (
-            <div className="home__example-step-wrap" key={s.label}>
-              <div className="home__example-step" style={{ ["--step-color" as string]: s.color }}>
-                <span className="home__example-step-label">{s.label}</span>
-                <p className="home__example-step-text">{s.text}</p>
-              </div>
-              {i < arr.length - 1 && <span className="home__example-arrow">↓</span>}
-            </div>
-          ))}
-          <a
-            href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/"
-            target="_blank"
-            rel="noreferrer"
-            className="home__example-citation"
-          >
-            ↗ Koida et al., 2023 · Cureus · PMC10436752
-          </a>
         </div>
       </div>
 
@@ -121,7 +98,7 @@ export function ProblemSection() {
         {CARDS.map((c) => (
           <div className="home__card" key={c.title}>
             <div className="home__card-icon" style={{ ["--card-color" as string]: c.color }}>
-              {c.icon}
+              <img src={c.icon} alt="" />
             </div>
             <div className="home__card-label">{c.label}</div>
             <h3 className="home__card-title">{c.title}</h3>

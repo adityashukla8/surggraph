@@ -8,7 +8,7 @@ export function Hero() {
         <div>
           <span className="home__badge">✦ All Things Agentic Hackathon • Taskmaster Track</span>
           <h1 className="home__hero-headline">
-            <span className="home__hero-headline-accent">Autonomous Surgical Safety System</span> 
+            <span className="home__hero-headline-accent">Autonomous, Continuously Improving Surgical Safety System</span> 
           </h1>
           <h2>Improving Patient
             Outcomes and Surgeon Efficiency by Detecting Surgical Errors & Complications
@@ -16,16 +16,14 @@ export function Hero() {
           <br></br>
 
           <div className="home__hero-flow">
-            <span className="home__hero-flow-lead">SurgGraph tracks surgery trajectory in real-time</span>
+            <span className="home__hero-flow-lead">SurgOS runs a surgical case as a continuously improving, closed loop, 2-fold system:</span>
             <ul className="home__hero-flow-list">
               {[
-                "Detects Surgical Errors",
-                "Reasons possible complications",
-                "Recommends corrective measures",
-                "Alerts on surgical plan divergence",
-                "Writes FHIR Records",
-              ].map((step) => (
-                <li key={step}>{step}</li>
+                <><b>SurgGraph (Autonomous Workflow)</b> watches the surgery, autonomously detects errors, reasons complications, and writes real-time FHIR records</>,
+                <><b>SurgBot (Feedback Workflow)</b> reviews every case with a surgeon and captures structured feedback</>,
+                <><b>The feedback layer</b> turns that feedback into knowledge every future case draws on</>,
+              ].map((step, i) => (
+                <li key={i}>{step}</li>
               ))}
             </ul>
           </div>

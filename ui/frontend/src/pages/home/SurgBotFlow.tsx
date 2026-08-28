@@ -10,8 +10,8 @@ import "@xyflow/react/dist/style.css";
 // off the Living State Graph node — SurgBot reads completed cases from the
 // same graph every other agent writes to, it just doesn't drive it.
 
-const LEFT_CENTER = 460;
-const RIGHT_CENTER = 1320;
+export const LEFT_CENTER = 460;
+export const RIGHT_CENTER = 1320;
 
 function rowLayout(count: number, width: number, gap: number, center: number) {
   const total = count * width + (count - 1) * gap;
@@ -84,7 +84,7 @@ const Y_GEMINI = 140;
 const Y_GRAPH = 280;
 const Y_AGENTS_ROW1 = 430;
 const Y_AGENTS_ROW2 = 530;
-const Y_OUTPUT = 680;
+export const Y_OUTPUT = 680;
 
 const monoAgentStyle: React.CSSProperties = {
   ...MONO_STYLE_BASE,
@@ -95,7 +95,7 @@ const monoAgentStyle: React.CSSProperties = {
   padding: "12px 12px",
 };
 
-const recapNodes: Node[] = [
+export const recapNodes: Node[] = [
   {
     id: "m-label",
     position: { x: LEFT_CENTER - 260, y: Y_LABEL },
@@ -184,7 +184,7 @@ const recapNodes: Node[] = [
 const monoDashed = { stroke: "#c3c9d3", strokeDasharray: "4 3" };
 const monoArrow = { type: MarkerType.ArrowClosed, color: "#c3c9d3" };
 
-const recapEdges: Edge[] = [
+export const recapEdges: Edge[] = [
   { id: "e-m-patient-gemini", source: "m-patient", target: "m-gemini", style: monoDashed, markerEnd: monoArrow },
   { id: "e-m-video-gemini", source: "m-video", target: "m-gemini", style: monoDashed, markerEnd: monoArrow },
   { id: "e-m-gemini-graph", source: "m-gemini", target: "m-graph", style: monoDashed, markerEnd: monoArrow },
@@ -231,9 +231,9 @@ const SB_FRAME_PAD_X = 60;
 const SB_FRAME_LEFT = Math.min(sbInputX, sbSubXs[0], sbDocX) - SB_FRAME_PAD_X;
 const SB_FRAME_RIGHT = Math.max(sbInputX + SB_MAIN_WIDTH, sbSubXs[2] + SB_SUB_WIDTH, sbTtsX + SB_OUTPUT_WIDTH) + SB_FRAME_PAD_X;
 const SB_FRAME_TOP = Y_INPUT - 55;
-const SB_FRAME_BOTTOM = Y_OUTPUT + 70 + 40;
+export const SB_FRAME_BOTTOM = Y_OUTPUT + 70 + 40;
 
-const surgbotNodes: Node[] = [
+export const surgbotNodes: Node[] = [
   {
     id: "sb-frame",
     position: { x: SB_FRAME_LEFT, y: SB_FRAME_TOP },
@@ -358,7 +358,7 @@ const arrow = { type: MarkerType.ArrowClosed, color: "#94a3b8" };
 const linkStyle = { stroke: "var(--home-accent)", strokeWidth: 2.5 };
 const linkArrow = { type: MarkerType.ArrowClosed, color: "#2a78d6" };
 
-const surgbotEdges: Edge[] = [
+export const surgbotEdges: Edge[] = [
   { id: "e-sb-surgeon-stt", source: "sb-surgeon", target: "sb-stt", animated: true, style: dashed, markerEnd: arrow },
   { id: "e-sb-stt-root", source: "sb-stt", target: "sb-root", animated: true, style: dashed, markerEnd: arrow },
   {
@@ -366,7 +366,7 @@ const surgbotEdges: Edge[] = [
     source: "m-graph",
     target: "sb-root",
     label: "reads completed cases",
-    labelStyle: { fill: "var(--home-accent)", fontWeight: 700, fontSize: 12 },
+    labelStyle: { fill: "var(--home-accent)", fontWeight: 700, fontSize: 15 },
     labelBgStyle: { fill: "#fff" },
     animated: true,
     style: linkStyle,
@@ -403,10 +403,10 @@ const surgbotEdges: Edge[] = [
 const nodes: Node[] = [...recapNodes, ...surgbotNodes];
 const edges: Edge[] = [...recapEdges, ...surgbotEdges];
 
-export function SurgBotFlow() {
+export function SurgBotFlow({ height = 760 }: { height?: number }) {
   const fitViewOptions = useMemo(() => ({ padding: 0.06 }), []);
   return (
-    <div style={{ height: 760, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
+    <div style={{ height, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
