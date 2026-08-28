@@ -291,6 +291,20 @@ Rebuilt the shared backend image (`gcloud builds submit`) and redeployed all 4 r
 
 Both fixes verified for real: rebuilt, redeployed all 3 backend services (env vars confirmed preserved via `describe`), re-ran the exact same audio E2E test — zero `severity>=ERROR` log entries afterward, and the exact disconnect scenario now produces one clean `INFO` line ("client disconnected mid-narration, stopping TTS stream") instead of 3 tracebacks. Full local suite re-run clean (159/159) both before and after this fix.
 
+### Model Armor input screening for SurgBot — closes a real gap found in a security review (2026-08-28)
+
+A same-day security/SDLC review (real web research against Google's SAIF and OWASP's Top 10 for Agentic Applications 2026, cross-checked against real `gcloud` output — IAM policies, service-account roles, CORS config, dependency pins) found that **every existing Model Armor use in this codebase only ever screened outbound, model-generated content** (the FHIR operative note, SurgBot's draft review document) — the one real untrusted-input surface, SurgBot's live voice/text turn, reached Gemini with zero pre-screening. Direct OWASP ASI01 (Agent Goal Hijack) exposure.
+
+**Fixed the GEAP-native way, not with a bolted-on filter**: added `agents/surgbot/model_armor.py::screen_user_input`, using Model Armor's real `sanitize_user_prompt` RPC — the documented input-screening counterpart to the `sanitize_model_response` call already in use. Confirmed via the installed SDK (`SanitizeUserPromptRequest` has the identical shape to `SanitizeModelResponseRequest`, just `user_prompt_data` instead of `model_response_data`) that a **Model Armor template is a filter policy, not a direction** — the existing `surggraph-surgbot-review-outbound` template is reused as-is, now enforced at both directions of the same conversation, which is the real enterprise pattern (one policy, multiple enforcement points) rather than standing up a redundant second template.
+
+Wired into `services/surgbot_service/main.py::_send_turn_to_agent` — the single real chokepoint both the audio-turn and typed-fallback paths already funnel through — screening `text` **before** the context tag is prepended and before the root agent's `async_stream_query` is ever called. A blocked turn never reaches Gemini: the tool-call disclosure chip fires (`screen_user_input` / `model_armor_input_screen` / `vertex_ai_model_armor` — new `ApiSurface` value added on both backend and frontend, same disclosure-is-structural convention as every other real call in this pipeline), the browser gets a real `error` message with the actual block reason, and the turn stops there. Fails closed on a Model Armor call failure itself, same contract as the outbound path.
+
+**Real tests, no mocks** (`tests/test_surgbot_model_armor.py`, hits the real Model Armor API): a clean reviewer turn passes; a real prompt-injection/jailbreak attempt blocks; a real-shaped test credit card number blocks (SDP). All 3 pass.
+
+**Real E2E, both locally and against the actual deployed Cloud Run service**, using the exact injection text above: the tool-call chip correctly showed `blocked: prompt injection / jailbreak pattern detected`, and the agent never responded to that turn (no tool call, no transcript — confirmed Gemini never saw it). A benign follow-up turn in the same session passed screening and proceeded normally (real `list_accessible_cases` call, real case data, real reply). Rebuilt and redeployed all 3 backend services + the frontend; re-ran the same test against `wss://surggraph-surgbot-service-...run.app` with identical results. Zero `severity>=ERROR` log entries afterward. Full suite: **162/162 passing** (159 + 3 new).
+
+**Disclosed, not fixed in this pass**: the other findings from the same security review (public unauthenticated Cloud Run endpoints, one shared service account across all agents, no CI/CD, no environment separation, unpinned `google-adk`/`google-genai`) are real and still open — this fix addresses specifically the one the user asked for (input screening), not the full list.
+
 ---
 
 ## Process issues worth remembering
