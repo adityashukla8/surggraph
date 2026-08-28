@@ -148,6 +148,19 @@ def deploy(client: vertexai.Client, force: bool = False):
             "display_name": DISPLAY_NAME,
             "requirements": [
                 "google-cloud-aiplatform[agent_engines,adk]",
+                # Real bug found 2026-08-28: neither google-adk nor
+                # google-genai is version-pinned anywhere in this project
+                # (pyproject.toml doesn't pin them either) — a redeploy
+                # months apart from the last one silently picked up a newer
+                # google-adk release whose Gemini model class expects an
+                # api_version attribute GlobalGemini's api_client override
+                # (tools/gemini_model.py) doesn't provide, breaking every
+                # single tool call with a real AttributeError. Pinned to
+                # this session's confirmed-working local versions so a
+                # future redeploy can't silently drift onto a breaking
+                # release the same way.
+                "google-adk==2.6.3",
+                "google-genai==2.17.0",
                 "pydantic",
                 "cloudpickle",
                 "python-dotenv",

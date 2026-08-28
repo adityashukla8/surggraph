@@ -37,7 +37,7 @@ PHASE_LABELS: dict[int, str] = {
 
 AgreementVerdict = Literal["agree", "disagree", "uncertain"]
 
-ApiSurface = Literal["vertex_ai_global", "google_cloud_speech", "google_cloud_tts"]
+ApiSurface = Literal["vertex_ai_global", "google_cloud_speech", "google_cloud_tts", "vertex_ai_medasr"]
 
 ApprovalStatus = Literal["drafting", "pending", "blocked", "approved", "rejected", "edited"]
 

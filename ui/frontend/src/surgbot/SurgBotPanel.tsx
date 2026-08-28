@@ -67,7 +67,9 @@ function modelSurfaceDisplay(modelId: string | null, apiSurface: string | null):
         ? "Cloud Speech-to-Text"
         : apiSurface === "google_cloud_tts"
           ? "Cloud Text-to-Speech"
-          : "unknown API surface";
+          : apiSurface === "vertex_ai_medasr"
+            ? "Vertex AI (MedASR, self-deployed)"
+            : "unknown API surface";
   return `${model} (${surface})`;
 }
 
@@ -287,7 +289,7 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                 </li>
                 <li>
                   <span className="sb__card-item-name">Speech-to-Text</span>
-                  <span className="sb__card-item-meta">Cloud Speech (Chirp 3) · transcription</span>
+                  <span className="sb__card-item-meta">MedASR (self-deployed) · transcription</span>
                 </li>
                 <li>
                   <span className="sb__card-item-name">Text-to-Speech</span>

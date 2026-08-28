@@ -6,12 +6,15 @@ This service does NOT run the ADK Runner itself — that would mean
 re-hosting the agent locally, duplicating what Agent Runtime already does,
 and losing Identity/Registry/Observability as automatic side effects of
 deployment. Its job on the voice path: hold the browser WebSocket open,
-accumulate a push-to-talk audio clip, run it through Cloud Speech-to-Text
-(agents/surgbot/speech.py), send the transcript to the ALREADY-DEPLOYED
-root agent via a real async_stream_query call, and run the model's reply
-through Cloud Text-to-Speech before sending audio back — a classic
-STT -> LLM -> TTS pipeline (plan_v2 §15), replacing the EXPERIMENTAL
-bidi_stream_query Live API transport this service used to require.
+accumulate a push-to-talk audio clip, run it through MedASR (a real,
+self-deployed medical-domain ASR model — docs/qa_log.md, 2026-08-28;
+agents/surgbot/speech.py::transcribe_audio_medasr, replacing Cloud
+Speech-to-Text/Chirp 3 for this path), send the transcript to the
+ALREADY-DEPLOYED root agent via a real async_stream_query call, and run
+the model's reply through Cloud Text-to-Speech before sending audio back
+— a classic STT -> LLM -> TTS pipeline (plan_v2 §15), replacing the
+EXPERIMENTAL bidi_stream_query Live API transport this service used to
+require.
 
 WHY THIS MIGRATION (plan_v2 §15, real production incidents this session,
 not a preference): (1) automatic-VAD-triggered barge-in reliably overflowed
@@ -118,7 +121,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _ROOT_AGENT_CACHE = _REPO_ROOT / "scripts" / ".deployed_root_agent.json"
 
 _DEFAULT_DISCLOSURE = {"agent_name": "surgbot_root", "model_id": GEMINI_MODEL, "api_surface": "vertex_ai_global"}
-_STT_DISCLOSURE = {"agent_name": "speech_to_text", "model_id": "chirp_3", "api_surface": "google_cloud_speech"}
+_STT_DISCLOSURE = {"agent_name": "speech_to_text", "model_id": "medasr", "api_surface": "vertex_ai_medasr"}
 _TTS_DISCLOSURE = {
     "agent_name": "text_to_speech",
     "model_id": f"chirp3-hd-{speech.TTS_VOICE.lower()}",
@@ -435,35 +438,40 @@ async def _send_turn_to_agent(
 
 
 async def _handle_audio_turn(
-    websocket: WebSocket, engine, state: dict[str, Any], stt_session: speech.StreamingTranscription | None
+    websocket: WebSocket, engine, state: dict[str, Any], audio_bytes: bytes | None
 ) -> None:
-    """Finalizes one push-to-talk turn's real-time streaming transcription
-    (plan_v2 §16 — audio was already being fed to Cloud Speech-to-Text via
-    stt_session.push_audio() as it was captured, since mic_start; most of
-    the recognition work has typically already happened by the time this
-    runs), discloses that stage exactly like a tool call, then hands the
-    real transcript to _send_turn_to_agent."""
-    if stt_session is None:
-        # mic_stop with no matching mic_start (e.g. a stray/duplicate
-        # message) — nothing to finalize, not a real error.
+    """Finalizes one push-to-talk turn's transcription via MedASR — a real,
+    self-deployed Health AI Developer Foundations Conformer ASR model
+    (docs/qa_log.md, 2026-08-28), replacing Cloud Speech-to-Text v2/Chirp 3
+    for this real-time voice path. MedASR's deployed container is a batch
+    endpoint (no documented streaming route — confirmed, not assumed), so
+    unlike the prior StreamingTranscription design, the whole clip is
+    accumulated during mic hold (see the binary-frame branch in
+    surgbot_voice below) and sent as ONE call here, on mic_stop. Real,
+    measured latency once the container is warm: ~1.1-1.2s for an ~8.5s
+    clip — faster than Chirp 3's one-shot latency, though it gives up
+    Chirp 3's "most of the recognition already happened by mic_stop"
+    property streaming had. Discloses exactly like a tool call, then hands
+    the real transcript to _send_turn_to_agent."""
+    if not audio_bytes:
+        # mic_stop with no matching mic_start, or a clip with zero bytes
+        # captured (e.g. a stray/duplicate message) — nothing to
+        # transcribe, not a real error.
         return
 
     call_id = f"c-{uuid.uuid4().hex[:8]}"
-    logger.info(
-        "surgbot voice ws[%s]: finalizing streaming transcribe_audio (%d bytes pushed)",
-        state["session_id"], stt_session.bytes_pushed,
-    )
+    logger.info("surgbot voice ws[%s]: transcribe_audio_medasr (%d bytes)", state["session_id"], len(audio_bytes))
     await _send_tool_call_started(
-        websocket, state, call_id, "transcribe_audio", f"streaming, {stt_session.bytes_pushed} bytes", _STT_DISCLOSURE
+        websocket, state, call_id, "transcribe_audio_medasr", f"{len(audio_bytes)} bytes", _STT_DISCLOSURE
     )
     try:
-        transcript = await stt_session.finish()
+        transcript = await asyncio.to_thread(speech.transcribe_audio_medasr, audio_bytes, sample_rate_hz=16000)
     except Exception as exc:
-        logger.exception("surgbot voice ws[%s]: streaming transcribe_audio failed", state["session_id"])
+        logger.exception("surgbot voice ws[%s]: transcribe_audio_medasr failed", state["session_id"])
         await _send_tool_call_finished(websocket, state, call_id, f"error: {exc}")
         await _send_json(websocket, {"type": "error", "detail": f"Speech-to-text failed: {exc}"})
         return
-    logger.info("surgbot voice ws[%s]: transcribe_audio -> %r", state["session_id"], transcript)
+    logger.info("surgbot voice ws[%s]: transcribe_audio_medasr -> %r", state["session_id"], transcript)
     await _send_tool_call_finished(websocket, state, call_id, transcript[:300])
 
     if not transcript:
@@ -557,10 +565,11 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
         "turn_task": None,
         "active_call_id": None,
     }
-    # Real streaming Speech-to-Text turn (plan_v2 §16) — created fresh on
-    # each mic_start, fed every captured chunk AS IT ARRIVES (not
-    # accumulated and sent as one blob on release), finalized on mic_stop.
-    stt_session: speech.StreamingTranscription | None = None
+    # MedASR is a batch endpoint (docs/qa_log.md, 2026-08-28) — the whole
+    # clip is accumulated here during mic hold and sent as one
+    # transcribe_audio_medasr() call on mic_stop, replacing the prior
+    # per-chunk StreamingTranscription design Chirp 3 used.
+    mic_buffer: bytearray | None = None
 
     try:
         while True:
@@ -574,8 +583,8 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
 
             data = message.get("bytes")
             if data is not None:
-                if stt_session is not None:
-                    stt_session.push_audio(bytes(data))
+                if mic_buffer is not None:
+                    mic_buffer.extend(data)
                 continue
 
             text = message.get("text")
@@ -594,16 +603,15 @@ async def surgbot_voice(websocket: WebSocket, session_id: str) -> None:
                 # stop_narration (§_cancel_turn_task's own docstring):
                 # never let two turns write to the same socket at once.
                 await _cancel_turn_task(state)
-                # Real StreamingRecognize session, started immediately —
-                # audio pushed below (in the binary-frame branch) starts
-                # reaching Cloud Speech-to-Text while the reviewer is still
-                # talking, not only after they release (plan_v2 §16).
-                stt_session = speech.StreamingTranscription(sample_rate_hz=16000)
-                stt_session.start()
+                # Fresh accumulator — audio pushed below (in the
+                # binary-frame branch) is buffered until mic_stop, then
+                # sent to MedASR as one clip (see _handle_audio_turn).
+                mic_buffer = bytearray()
             elif msg_type == "mic_stop":
-                session_to_finish, stt_session = stt_session, None
+                buffer_to_finish, mic_buffer = mic_buffer, None
+                audio_bytes = bytes(buffer_to_finish) if buffer_to_finish is not None else None
                 state["turn_task"] = asyncio.create_task(
-                    _run_turn(_handle_audio_turn(websocket, engine, state, session_to_finish))
+                    _run_turn(_handle_audio_turn(websocket, engine, state, audio_bytes))
                 )
             elif msg_type == "text_turn":
                 await _cancel_turn_task(state)

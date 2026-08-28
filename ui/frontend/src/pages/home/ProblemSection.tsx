@@ -1,5 +1,4 @@
 interface ProblemCard {
-  color: string;
   icon: string;
   label: string;
   title: string;
@@ -11,7 +10,6 @@ interface ProblemCard {
 
 const CARDS: ProblemCard[] = [
   {
-    color: "var(--home-accent)",
     icon: "/icons/error.png",
     label: "Technique Errors",
     title: "One missed step, a cascading complication",
@@ -26,7 +24,6 @@ const CARDS: ProblemCard[] = [
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/",
   },
   {
-    color: "var(--home-accent)",
     icon: "/icons/complication.png",
     label: "Complication Risk",
     title: "Complications are common, and hard to see coming",
@@ -41,14 +38,13 @@ const CARDS: ProblemCard[] = [
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/",
   },
   {
-    color: "var(--home-accent)",
     icon: "/icons/documentation.png",
     label: "Documentation Lag",
     title: "The record arrives long after the case is over",
     body: (
       <>
         <b>374 hours — over 15 days</b> is the average time a dictated operative report takes to reach a verified,
-        signed state, versus <b>28 minutes</b> for a structured, template-driven note. The record every other
+        signed state. The record every other
         clinician relies on is routinely two weeks stale.
       </>
     ),
@@ -57,7 +53,6 @@ const CARDS: ProblemCard[] = [
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/",
   },
   {
-    color: "var(--home-accent)",
     icon: "/icons/feedback-loop.svg",
     label: "Feedback Loop Failure",
     title: "Feedback rarely changes the next case",
@@ -67,7 +62,7 @@ const CARDS: ProblemCard[] = [
         98 real trials is just <b>4.4 percentage points</b>. Lessons from one case routinely never reach the next.
       </>
     ),
-    pairing: "SurgOS's Learning Loop routes every reviewed case's feedback into knowledge SurgGraph's agents automatically consult — not another initiative hoping to be noticed.",
+    pairing: "SurgOS's Learning Loop routes every surgeon's feedback into knowledge which SurgGraph's agents automatically consult.",
     citationLabel: "Ivers et al., 2014 · J Gen Intern Med · PMC4238192",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/",
   },
@@ -94,13 +89,16 @@ export function ProblemSection() {
         </div>
       </div>
 
+      <span className="home__eyebrow">Challenges SurgOS addresses</span>
       <div className="home__problem-grid">
         {CARDS.map((c) => (
           <div className="home__card" key={c.title}>
-            <div className="home__card-icon" style={{ ["--card-color" as string]: c.color }}>
-              <img src={c.icon} alt="" />
+            <div className="home__card-top">
+              <div className="home__card-icon">
+                <img src={c.icon} alt="" />
+              </div>
+              <div className="home__card-label">{c.label}</div>
             </div>
-            <div className="home__card-label">{c.label}</div>
             <h3 className="home__card-title">{c.title}</h3>
             <div className="home__card-body">{c.body}</div>
             <hr className="home__card-divider" />

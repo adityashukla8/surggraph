@@ -47,15 +47,19 @@ nothing) — that's a real, honest empty result, not a failure.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import queue
 import re
+import struct
 from collections.abc import AsyncIterator, Iterator
 
 from dotenv import load_dotenv
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import GoogleAPIError
+from google.cloud import aiplatform
 from google.cloud import texttospeech_v1beta1 as texttospeech
 from google.cloud.speech_v2 import SpeechClient
 from google.cloud.speech_v2.types import cloud_speech
@@ -84,8 +88,67 @@ TTS_SAMPLE_RATE_HZ = 24000
 
 _RECOGNIZER = f"projects/{PROJECT_ID}/locations/{SPEECH_REGION}/recognizers/_"
 
+# MedASR — a real, self-deployed Health AI Developer Foundations Conformer
+# ASR model fine-tuned on ~5,000 hours of de-identified clinical
+# dictation/conversation audio (real, confirmed benchmark WER 5.2-6.9% vs.
+# Whisper large-v3's 12.5-28.2% on medical dictation, per Google's own
+# model card) — an OPT-IN alternative to Chirp 3 above, not a replacement.
+# transcribe_audio() (Chirp 3, managed, streaming-capable) stays the
+# default STT path everywhere it's already wired in; nothing calls this
+# function yet. Deployed to its own always-on Vertex AI endpoint
+# (n1-standard-8 + 1x NVIDIA_TESLA_T4 — the one real deploy option Model
+# Garden offers for this model, confirmed via list_deploy_options()).
+MEDASR_ENDPOINT_ID = os.environ.get("MEDASR_ENDPOINT_ID")
+MEDASR_REGION = os.environ.get("SURGGRAPH_REGION", "us-central1")
+
 _speech_client: SpeechClient | None = None
 _tts_client: texttospeech.TextToSpeechClient | None = None
+_medasr_endpoint: aiplatform.Endpoint | None = None
+_medasr_initialized = False
+
+
+def medasr_available() -> bool:
+    return bool(MEDASR_ENDPOINT_ID)
+
+
+def _get_medasr_endpoint() -> aiplatform.Endpoint:
+    global _medasr_endpoint, _medasr_initialized
+    if _medasr_endpoint is None:
+        if not _medasr_initialized:
+            aiplatform.init(project=PROJECT_ID, location=MEDASR_REGION)
+            _medasr_initialized = True
+        _medasr_endpoint = aiplatform.Endpoint(MEDASR_ENDPOINT_ID)
+    return _medasr_endpoint
+
+
+def _pcm16_to_wav_bytes(pcm16_bytes: bytes, sample_rate_hz: int) -> bytes:
+    """Wraps headerless PCM16 mono samples (what the browser AudioWorklet
+    captures, and what Chirp 3's own RecognitionConfig above consumes
+    directly) in a minimal, standard 44-byte WAV header — MedASR's
+    real deployed route is /v1/audio/transcriptions (OpenAI-Whisper-
+    compatible), which expects a complete audio FILE, not raw samples."""
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate_hz * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = len(pcm16_bytes)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + data_size,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,  # PCM
+        num_channels,
+        sample_rate_hz,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b"data",
+        data_size,
+    )
+    return header + pcm16_bytes
 
 
 def _get_speech_client() -> SpeechClient:
@@ -141,6 +204,51 @@ def transcribe_audio(pcm16_bytes: bytes, sample_rate_hz: int = 16000) -> str:
         transcript = " ".join(
             result.alternatives[0].transcript for result in response.results if result.alternatives
         ).strip()
+        span.set_attribute("stt.transcript_length", len(transcript))
+        return transcript
+
+
+def transcribe_audio_medasr(pcm16_bytes: bytes, sample_rate_hz: int = 16000) -> str:
+    """Real, self-deployed MedASR transcription — same signature/contract
+    as transcribe_audio() above (raises on a real failure, "" only for a
+    genuine empty clip) so callers can swap between the two without other
+    changes. Blocking — callers MUST wrap in asyncio.to_thread. Confirmed
+    real wire shape (Google's own quick_start_with_model_garden.ipynb,
+    Google-Health/medasr): raw_predict() with a JSON {"file": <base64 WAV>}
+    body — the deployed container exposes an OpenAI-Whisper-compatible
+    /v1/audio/transcriptions route, not the standard predict/instances
+    envelope, so plain Endpoint.predict() does not apply here."""
+    if not medasr_available():
+        raise RuntimeError("transcribe_audio_medasr: MEDASR_ENDPOINT_ID is not set")
+
+    with _tracer.start_as_current_span("stt.medasr_transcribe") as span:
+        span.set_attribute("stt.model", "medasr")
+        span.set_attribute("stt.region", MEDASR_REGION)
+        span.set_attribute("stt.audio_bytes", len(pcm16_bytes))
+        span.set_attribute("stt.audio_duration_s", len(pcm16_bytes) / 2 / sample_rate_hz if pcm16_bytes else 0.0)
+
+        if not pcm16_bytes:
+            span.set_attribute("stt.transcript_length", 0)
+            return ""
+
+        wav_bytes = _pcm16_to_wav_bytes(pcm16_bytes, sample_rate_hz)
+        body = json.dumps({"file": base64.b64encode(wav_bytes).decode("utf-8")}).encode("utf-8")
+
+        try:
+            response = _get_medasr_endpoint().raw_predict(body=body, headers={"Content-Type": "application/json"})
+        except GoogleAPIError as exc:
+            logger.exception("surgbot speech: transcribe_audio_medasr call failed")
+            span.record_exception(exc)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, f"medasr raw_predict failed: {exc}"))
+            raise
+
+        transcript = json.loads(response.content)["text"]
+        # Real, observed quirk: the deployed container's raw output includes
+        # a literal trailing "</s>" end-of-sequence token — confirmed via a
+        # direct real call, not assumed. Strips only that exact marker so a
+        # genuinely different future output shape fails loudly instead of
+        # silently losing real transcript text to an overzealous regex.
+        transcript = transcript.replace("</s>", "").strip()
         span.set_attribute("stt.transcript_length", len(transcript))
         return transcript
 

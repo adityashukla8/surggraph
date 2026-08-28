@@ -17,6 +17,7 @@ from agents.surgbot.speech import (
     synthesize_speech,
     synthesize_speech_streaming,
     transcribe_audio,
+    transcribe_audio_medasr,
 )
 
 
@@ -119,3 +120,45 @@ async def test_synthesize_speech_streaming_empty_text_raises():
     with pytest.raises(ValueError):
         async for _ in synthesize_speech_streaming(""):
             pass
+
+
+# --- MedASR — real, self-deployed endpoint (agents/surgbot/speech.py) -------
+#
+# Same round-trip philosophy as Chirp 3 above, but with a real sentence
+# drawn from this project's own actual demo vocabulary (needle_handling /
+# vesicourethral anastomosis / laparoscopic) rather than a generic sentence
+# — MedASR's whole real value proposition is medical-terminology accuracy,
+# so the test should actually exercise that, not just prove connectivity.
+
+
+def test_medasr_synthesize_then_transcribe_round_trip():
+    import audioop
+
+    original = (
+        "The needle was lost during the vesicourethral anastomosis and retrieved after a brief "
+        "laparoscopic search of the abdominal wall."
+    )
+    audio = synthesize_speech(original)
+    pcm, rate = _wav_pcm_and_rate(audio)
+
+    # MedASR's real deployed container is strict about exactly 16kHz mono
+    # (confirmed via a real 400: "Sample rate 24000 is not 16000") — the
+    # actual production capture path (browser AudioWorklet) is already
+    # 16kHz-native, so this resample only exists to make synthesize_speech's
+    # 24kHz TTS output usable as this test's synthetic input.
+    if rate != 16000:
+        pcm, _ = audioop.ratecv(pcm, 2, 1, rate, 16000, None)
+        rate = 16000
+
+    transcript = transcribe_audio_medasr(pcm, sample_rate_hz=rate)
+
+    original_words = set(original.lower().rstrip(".").split())
+    transcript_words = set(transcript.lower().rstrip(".").split())
+    overlap = original_words & transcript_words
+    assert len(overlap) / len(original_words) >= 0.6, (
+        f"expected most words to round-trip; original={original!r} transcript={transcript!r}"
+    )
+
+
+def test_medasr_transcribe_empty_audio_returns_empty_string_not_an_error():
+    assert transcribe_audio_medasr(b"", sample_rate_hz=16000) == ""
