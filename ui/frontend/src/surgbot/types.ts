@@ -33,7 +33,12 @@ export const PHASE_FALLBACK_LABELS: Record<ReviewPhase, string> = {
  *  two speech stages disclose their own real service. All three are
  *  disclosed identically and none is ever hidden — see the disclosure
  *  requirement in SurgBotPanel.tsx. */
-export type ApiSurface = "vertex_ai_global" | "google_cloud_speech" | "google_cloud_tts" | "vertex_ai_medasr";
+export type ApiSurface =
+  | "vertex_ai_global"
+  | "google_cloud_speech"
+  | "google_cloud_tts"
+  | "vertex_ai_medasr"
+  | "vertex_ai_model_armor";
 
 export type ApprovalStatus = "drafting" | "pending" | "blocked" | "approved" | "rejected" | "edited";
 

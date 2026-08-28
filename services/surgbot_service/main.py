@@ -76,7 +76,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from agents.surgbot import case_index, feedback, speech, store, subagents
+from agents.surgbot import case_index, feedback, model_armor, speech, store, subagents
 from agents.surgbot.root_agent import TOOL_DISCLOSURE, TOOL_PHASE_MAP
 from agents.surgbot.schema import PHASE_LABELS, SurgBotSession
 from tools import memory_bank
@@ -126,6 +126,11 @@ _TTS_DISCLOSURE = {
     "agent_name": "text_to_speech",
     "model_id": f"chirp3-hd-{speech.TTS_VOICE.lower()}",
     "api_surface": "google_cloud_tts",
+}
+_INPUT_ARMOR_DISCLOSURE = {
+    "agent_name": "model_armor_input_screen",
+    "model_id": "model-armor",
+    "api_surface": "vertex_ai_model_armor",
 }
 
 _vertex_client: vertexai.Client | None = None
@@ -328,7 +333,40 @@ async def _send_turn_to_agent(
     The FIRST real turn of a session gets a one-time bracketed
     `[context: ...]` tag prepended (see root_agent.py's own instruction) —
     ADK's session continuity means the model only needs to see this once.
+
+    SCREENED BEFORE ANY OF THAT (2026-08-28 security review finding, fixed
+    same day): `text` is the raw reviewer turn — voice transcript or typed
+    fallback, real untrusted input — run through Model Armor's
+    sanitize_user_prompt (agents/surgbot/model_armor.py::screen_user_input,
+    the real GEAP Model Armor component, same template already used for
+    outbound review-document screening) BEFORE it is ever sent to the root
+    agent. A blocked turn never reaches Gemini at all — this is the one
+    real untrusted-input surface in this codebase, and it previously had
+    no pre-LLM content-safety screen.
     """
+    armor_call_id = f"c-{uuid.uuid4().hex[:8]}"
+    await _send_tool_call_started(
+        websocket, state, armor_call_id, "screen_user_input", f"{len(text)} chars", _INPUT_ARMOR_DISCLOSURE
+    )
+    try:
+        screen_result = await asyncio.to_thread(model_armor.screen_user_input, text)
+    except Exception as exc:
+        logger.exception("surgbot voice ws[%s]: screen_user_input call failed", state["session_id"])
+        await _send_tool_call_finished(websocket, state, armor_call_id, f"error: {exc}")
+        await _send_json(websocket, {"type": "error", "detail": "Content-safety screening failed — turn blocked."})
+        return
+    if screen_result.blocked:
+        logger.info(
+            "surgbot voice ws[%s]: screen_user_input BLOCKED turn (%s)", state["session_id"], screen_result.reason
+        )
+        await _send_tool_call_finished(websocket, state, armor_call_id, f"blocked: {screen_result.reason}")
+        await _send_json(
+            websocket,
+            {"type": "error", "detail": f"This input was blocked by content-safety screening: {screen_result.reason}"},
+        )
+        return
+    await _send_tool_call_finished(websocket, state, armor_call_id, "passed")
+
     if not state.get("context_sent"):
         message = (
             f"[context: session_id={state['session_id']} reviewer_id={state['reviewer_id']} "

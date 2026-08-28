@@ -69,7 +69,9 @@ function modelSurfaceDisplay(modelId: string | null, apiSurface: string | null):
           ? "Cloud Text-to-Speech"
           : apiSurface === "vertex_ai_medasr"
             ? "Vertex AI (MedASR, self-deployed)"
-            : "unknown API surface";
+            : apiSurface === "vertex_ai_model_armor"
+              ? "Vertex AI (Model Armor)"
+              : "unknown API surface";
   return `${model} (${surface})`;
 }
 
@@ -319,7 +321,7 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
                 </li>
                 <li>
                   <span className="sb__card-item-name">Model Armor</span>
-                  <span className="sb__card-item-meta">screens drafts before they're approvable</span>
+                  <span className="sb__card-item-meta">screens every turn you send, and every draft before it's approvable</span>
                 </li>
               </ul>
             </div>

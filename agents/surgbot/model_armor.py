@@ -12,17 +12,28 @@ jailbreak detection at HIGH confidence, malicious URL detection, SDP Basic
 mode), the exact command run and confirmed via `gcloud model-armor templates
 describe surggraph-surgbot-review-outbound --location=us-central1`.
 
-Screens the draft review document's synthesized narrative before it's ever
-shown to a surgeon as an approvable artifact (Phase 5, root_agent.py's
-draft_review_document tool) — the review document is Gemini-generated content
-about a real case, synthesized from real case-graph text (including
-literature abstracts pulled live from third-party sources), so the same
-"model-generated content about to leave this reasoning loop" risk
-tools/model_armor.py already screens for on the operative-record path
-applies here too.
+Two real enforcement points on the SAME template — a template is a filter
+policy, not a direction:
+
+1. screen_review_document (sanitize_model_response) — screens the draft
+   review document's synthesized narrative before it's ever shown to a
+   surgeon as an approvable artifact (Phase 5, root_agent.py's
+   draft_review_document tool). Gemini-generated content about a real
+   case, synthesized from real case-graph text (including literature
+   abstracts pulled live from third-party sources) — the same "model-
+   generated content about to leave this reasoning loop" risk tools/
+   model_armor.py already screens for on the operative-record path.
+
+2. screen_user_input (sanitize_user_prompt, added 2026-08-28) — screens a
+   reviewer's raw turn (voice transcript or typed text) BEFORE it ever
+   reaches the root agent's Gemini call. This closes a real gap found in
+   a security review that day: this was the one untrusted-input surface
+   in the whole codebase with no pre-LLM content-safety screen at all —
+   every other Model Armor use in this project screened outbound
+   (model-generated) content, never inbound (user-generated) content.
 
 FAILS CLOSED, same contract as tools/model_armor.py: any GoogleAPIError
-blocks rather than silently skipping the check.
+blocks rather than silently skipping the check, on both paths.
 """
 
 from __future__ import annotations
@@ -70,6 +81,52 @@ class ModelArmorScreenResult(BaseModel):
     blocked: bool
     reason: str | None = None
     raw_filter_match_state: str
+
+
+def screen_user_input(text: str) -> ModelArmorScreenResult:
+    """Runs a reviewer's raw turn (voice transcript or typed text) through
+    sanitize_user_prompt — the real Model Armor GEAP component, same
+    template as screen_review_document below (a template is just a filter
+    policy; sanitize_user_prompt/sanitize_model_response are the two real
+    enforcement points the SAME policy can sit at). This is the one real
+    untrusted-input surface in this codebase that previously reached Gemini
+    with no pre-screening at all (2026-08-28 security review finding) —
+    called from services/surgbot_service/main.py::_send_turn_to_agent,
+    BEFORE the turn is ever sent to the root agent, so a blocked input
+    never reaches the LLM at all. Fails closed, same contract as
+    screen_review_document."""
+    request = modelarmor_v1.SanitizeUserPromptRequest(
+        name=_TEMPLATE_NAME,
+        user_prompt_data=modelarmor_v1.DataItem(text=text),
+    )
+
+    try:
+        response = _get_client().sanitize_user_prompt(request=request)
+    except GoogleAPIError as exc:
+        logger.exception("surgbot model_armor: sanitize_user_prompt call failed — blocking the turn")
+        return ModelArmorScreenResult(
+            blocked=True,
+            reason=f"Model Armor call failed ({type(exc).__name__}) — blocked rather than forwarding unscreened",
+            raw_filter_match_state="CALL_FAILED",
+        )
+
+    result = response.sanitization_result
+
+    if result.invocation_result != modelarmor_v1.InvocationResult.SUCCESS:
+        return ModelArmorScreenResult(
+            blocked=True,
+            reason=f"Model Armor filters did not fully execute ({result.invocation_result.name})",
+            raw_filter_match_state=result.filter_match_state.name,
+        )
+
+    if result.filter_match_state != modelarmor_v1.FilterMatchState.MATCH_FOUND:
+        return ModelArmorScreenResult(blocked=False, raw_filter_match_state=result.filter_match_state.name)
+
+    return ModelArmorScreenResult(
+        blocked=True,
+        reason=_describe_match(result),
+        raw_filter_match_state=result.filter_match_state.name,
+    )
 
 
 def screen_review_document(text: str) -> ModelArmorScreenResult:
