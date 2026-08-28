@@ -4,7 +4,7 @@ const LINKS = [
   { href: "#problem", label: "Problem" },
   { href: "#solution", label: "Solution" },
   { href: "#how-it-works", label: "SurgGraph" },
-  { href: "#agents", label: "Agents" },
+  { href: "#agents", label: "Orchestration" },
   { href: "#state", label: "State" },
   { href: "#surgbot", label: "SurgBot" },
   { href: "#tech", label: "Tech" },

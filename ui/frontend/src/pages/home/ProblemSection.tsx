@@ -27,7 +27,7 @@ const CARDS: ProblemCard[] = [
         complication — versus <b>12%</b> with none. One missed step rarely stays contained to the moment it happens.
       </>
     ),
-    benefitHeader: "Turns hours-later review into real-time detection",
+    benefitHeader: "SurgGraph reports instantly, not hours later",
     pairing: "SurgGraph flags the technique error live, in the window it happens — not hours later in a post-op chart review.",
     citationLabel: "Gawria et al., 2023 · PMC10095268",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/",
@@ -42,7 +42,7 @@ const CARDS: ProblemCard[] = [
         Complications aren't rare edge cases; they're a routine part of the risk every case carries.
       </>
     ),
-    benefitHeader: "Turns a one-time checklist into continuous reasoning",
+    benefitHeader: "SurgGraph monitors continuously",
     pairing: "SurgGraph reasons about complication risk continuously — against the patient's own anatomy and live literature, not a one-time pre-op checklist.",
     citationLabel: "Tevis et al., 2016 · Annals of Surgery · PMC6214627",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/",
@@ -58,7 +58,7 @@ const CARDS: ProblemCard[] = [
         clinician relies on is routinely two weeks stale.
       </>
     ),
-    benefitHeader: "Turns a 15-day wait into minutes",
+    benefitHeader: "Wait time cut to minutes, not 15 days",
     pairing: "SurgGraph drafts the note automatically at case close — turning a 15-day wait into minutes.",
     citationLabel: "Laflamme et al., 2005 · PMC1560865",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/",
@@ -73,7 +73,7 @@ const CARDS: ProblemCard[] = [
         98 real trials is just <b>4.4 percentage points</b>. Lessons from one case routinely never reach the next.
       </>
     ),
-    benefitHeader: "Turns one case's feedback into knowledge for every case",
+    benefitHeader: "SurgOS drives collective case context",
     pairing: "SurgOS's Learning Loop routes every surgeon's feedback into knowledge which SurgGraph's agents automatically consult.",
     citationLabel: "Ivers et al., 2014 · J Gen Intern Med · PMC4238192",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/",
@@ -115,7 +115,10 @@ export function ProblemSection() {
             <h3 className="home__card-title">{c.title}</h3>
             <div className="home__card-body">{c.body}</div>
             <hr className="home__card-divider" />
-            <div className="home__card-pairing">→ {c.pairing}</div>
+            <div className="home__card-pairing">
+              <span className="home__card-pairing-header">{c.benefitHeader}</span>
+              → {c.pairing}
+            </div>
             <a href={c.citationHref} target="_blank" rel="noreferrer" className="home__card-citation">
               ↗ {c.citationLabel}
             </a>
