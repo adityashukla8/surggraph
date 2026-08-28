@@ -14,7 +14,14 @@ deployment instead of redeploying every time root_agent.py's tools haven't
 actually changed — pass --force to redeploy unconditionally (needed whenever
 root_agent.py's tool set changes).
 
-Usage: uv run python3 scripts/deploy_surgbot_agent.py [--force]
+Usage: uv run python3 scripts/deploy_surgbot_agent.py [--force] [--agent-identity]
+
+--agent-identity swaps the deploy's service_account for
+identity_type=AGENT_IDENTITY (real SPIFFE-based Agent Identity, ASI03-hardening
+per docs.cloud.google.com/agent-builder/agent-engine/agent-identity) as a
+controlled, reversible experiment — see the module-level comment above
+SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT for why this wasn't the default and what to
+check if it's used.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from pathlib import Path
 import vertexai
 from dotenv import load_dotenv
 from vertexai import agent_engines
+from vertexai import types as vertexai_types
 
 from agents.surgbot.root_agent import build_root_agent
 from agents.surgbot.speech import SPEECH_LANGUAGE_CODE, SPEECH_REGION, TTS_REGION, TTS_VOICE
@@ -51,9 +59,22 @@ _CACHE_PATH = Path(__file__).resolve().parent / ".deployed_root_agent.json"
 # services/state_service and services/orchestrator_service already use
 # (confirmed via IAM policy to hold roles/datastore.user AND
 # roles/modelarmor.user — exactly what this agent's tools need).
-# NOT switched to identity_type=AGENT_IDENTITY in this pass (plan_v2 §15.1):
-# that principal's own IAM grants (Firestore, Model Armor) are unverified,
-# and this migration is already large enough — documented as a follow-up.
+#
+# --agent-identity follow-up (2026-08-28): the standard GEAP fix for a
+# shared, over-broad service account is a per-agent Agent Identity
+# (SPIFFE + auto-provisioned X.509 cert, no long-lived key). Its IAM-grant
+# principal format is
+#   principal://agents.global.org-ORG_ID.system.id.goog/resources/aiplatform/...
+# which is hard-coded to require an org ID — `gcloud organizations list`
+# returns 0 items for this project (no parent GCP organization exists), so
+# that principal string cannot be constructed here at all, and no
+# documented per-project-only fallback exists. This means an
+# AGENT_IDENTITY-deployed root agent gets a real, auto-provisioned identity
+# but CANNOT be granted roles/datastore.user or roles/modelarmor.user the
+# normal way — expected failure mode is every Firestore/Model Armor tool
+# call breaking with a permission error, same shape as the bug this
+# comment block opens with. --agent-identity exists to test that
+# prediction empirically rather than leave it as an assumption.
 SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT = os.environ.get(
     "SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT", f"surggraph-runtime@{PROJECT_ID}.iam.gserviceaccount.com"
 )
@@ -115,7 +136,7 @@ def _find_existing(client: vertexai.Client):
     return None
 
 
-def deploy(client: vertexai.Client, force: bool = False):
+def deploy(client: vertexai.Client, force: bool = False, agent_identity: bool = False):
     cache = _load_cache()
 
     if not force:
@@ -140,7 +161,13 @@ def deploy(client: vertexai.Client, force: bool = False):
     print(
         f"Deploying SurgBot root agent to Agent Runtime "
         f"(project={PROJECT_ID}, region={REGION}, model={GEMINI_MODEL}@global, "
-        f"stt_region={SPEECH_REGION}, tts_region={TTS_REGION}, tts_voice={TTS_VOICE}, 9 real tools)..."
+        f"stt_region={SPEECH_REGION}, tts_region={TTS_REGION}, tts_voice={TTS_VOICE}, 9 real tools, "
+        f"identity={'AGENT_IDENTITY (experimental test)' if agent_identity else SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT})..."
+    )
+    identity_config = (
+        {"identity_type": vertexai_types.IdentityType.AGENT_IDENTITY}
+        if agent_identity
+        else {"service_account": SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT}
     )
     engine = client.agent_engines.create(
         agent=app,
@@ -196,8 +223,7 @@ def deploy(client: vertexai.Client, force: bool = False):
                 **_subagent_resource_env_vars(),
                 **_TELEMETRY_ENV_VARS,
             },
-            "service_account": SURGBOT_ROOT_AGENT_SERVICE_ACCOUNT,
-            # NO identity_type — see this file's module-level comment above.
+            **identity_config,
         },
     )
     cache["resource_name"] = engine.api_resource.name
@@ -237,8 +263,9 @@ async def smoke_test(engine) -> bool:
 
 def main() -> int:
     force = "--force" in sys.argv
+    agent_identity = "--agent-identity" in sys.argv
     client = vertexai.Client(project=PROJECT_ID, location=REGION)
-    engine = deploy(client, force=force)
+    engine = deploy(client, force=force, agent_identity=agent_identity)
     success = asyncio.run(smoke_test(engine))
 
     if success:

@@ -1,0 +1,169 @@
+# CI/CD pipeline: builds and deploys all four Cloud Run services from a
+# commit, replacing the hand-run `gcloud builds submit` + four `gcloud run
+# deploy` invocations that were used manually until now.
+#
+# THE LOAD-BEARING DETAIL — why steps 0/1 exist at all:
+# a GitHub-triggered build clones from GitHub, and GitHub does NOT have
+# data/video/ or data/annotations/ (both .gitignore'd — 878MB and 12MB of
+# real dataset media that has no business in git history). But the
+# orchestrator's vision agents read frames straight off local disk
+# (tools/video_utils.py::_find_source_video, no GCS fallback) and
+# tools/action_labels.py reads data/annotations/{video}/action_continuous.txt
+# at runtime. Without these two steps the image builds and deploys perfectly
+# cleanly and then fails EVERY case with "no source video found for
+# 'video_01'" — the exact failure already recorded in .gcloudignore's own
+# comment, which is why that file deliberately un-ignores these paths for
+# local `--source` deploys. GCS is the durable copy both are pulled from.
+#
+# Only video_left.avi is pulled, not the whole 878MB directory: .avi is
+# first in _SOURCE_SUFFIX_PRIORITY and is therefore already the file being
+# used today, so this is behaviour-identical while cutting 371MB off every
+# build. video_left_annotated.mp4 is not needed in the image either — the
+# frontend streams it from GCS via services/state_service/gcs_video.py.
+#
+# ENV VARS ARE DELIBERATELY NOT PASSED on any `gcloud run deploy` below.
+# Cloud Run inherits the previous revision's env config when you deploy with
+# --image alone, and several vars (MEDASR_ENDPOINT_ID,
+# SURGBOT_ROOT_AGENT_RESOURCE, FIRESTORE_DATABASE, the CORS origins) were set
+# by hand and are NOT derivable from the repo. Passing --set-env-vars here
+# would silently wipe them on the first CI deploy.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: us-central1-docker.pkg.dev/liveapi-488810/cloud-run-source-deploy
+  _RUNTIME_SA: surggraph-runtime@liveapi-488810.iam.gserviceaccount.com
+  _BUCKET: gs://surggraph-cases-liveapi-488810
+  _STATE_URL: https://surggraph-state-service-bfa6iiuaia-uc.a.run.app
+  _ORCH_URL: https://surggraph-orchestrator-service-bfa6iiuaia-uc.a.run.app
+  _SURGBOT_URL: https://surggraph-surgbot-service-bfa6iiuaia-uc.a.run.app
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+# uv sync + a 507MB media pull + npm ci + four Cloud Run deploys does not fit
+# in Cloud Build's 10-minute default.
+timeout: 2400s
+
+steps:
+  # 0 — real dataset media the repo intentionally does not carry (see header).
+  - id: fetch-video
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p data/video/video_01
+        gcloud storage cp ${_BUCKET}/videos/video_01/video_left.avi data/video/video_01/
+        ls -la data/video/video_01/
+
+  - id: fetch-annotations
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    waitFor: ['-']  # independent of the video pull; run both at once
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p data/annotations
+        gcloud storage cp -r ${_BUCKET}/annotations/video_01 data/annotations/
+        ls -la data/annotations/video_01/
+
+  # 1 — one shared backend image; SERVICE_MODULE picks the app at deploy time.
+  - id: build-backend
+    name: gcr.io/cloud-builders/docker
+    waitFor: [fetch-video, fetch-annotations]
+    args:
+      - build
+      - -t
+      - ${_REPO}/surggraph-backend:${SHORT_SHA}
+      - -t
+      - ${_REPO}/surggraph-backend:latest
+      - .
+
+  - id: push-backend
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REPO}/surggraph-backend']
+
+  # 2 — the three backend services, deployed concurrently off that one image.
+  - id: deploy-state
+    name: gcr.io/cloud-builders/gcloud
+    waitFor: [push-backend]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - surggraph-state-service
+      - --image=${_REPO}/surggraph-backend:${SHORT_SHA}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+
+  - id: deploy-orchestrator
+    name: gcr.io/cloud-builders/gcloud
+    waitFor: [push-backend]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - surggraph-orchestrator-service
+      - --image=${_REPO}/surggraph-backend:${SHORT_SHA}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+
+  - id: deploy-surgbot
+    name: gcr.io/cloud-builders/gcloud
+    waitFor: [push-backend]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - surggraph-surgbot-service
+      - --image=${_REPO}/surggraph-backend:${SHORT_SHA}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+
+  # 3 — frontend. Vite inlines import.meta.env.VITE_* at BUILD time, so the
+  # three backend URLs are --build-arg's, not runtime env. They are stable
+  # Cloud Run URLs (a service keeps its URL across revisions), which is why
+  # they can be substitutions rather than being read back from step 2.
+  # --set-build-env-vars does NOT work here: confirmed a silent no-op on a
+  # Dockerfile-strategy build (qa_log #48), which is why this is an explicit
+  # docker build with real --build-arg flags.
+  - id: build-frontend
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']  # nothing about the frontend depends on the backend build
+    dir: ui/frontend
+    args:
+      - build
+      - --build-arg=VITE_STATE_SERVICE_URL=${_STATE_URL}
+      - --build-arg=VITE_ORCHESTRATOR_URL=${_ORCH_URL}
+      - --build-arg=VITE_SURGBOT_SERVICE_URL=${_SURGBOT_URL}
+      - -t
+      - ${_REPO}/surggraph-frontend:${SHORT_SHA}
+      - -t
+      - ${_REPO}/surggraph-frontend:latest
+      - .
+
+  - id: push-frontend
+    name: gcr.io/cloud-builders/docker
+    waitFor: [build-frontend]
+    args: [push, --all-tags, '${_REPO}/surggraph-frontend']
+
+  - id: deploy-frontend
+    name: gcr.io/cloud-builders/gcloud
+    waitFor: [push-frontend]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - surggraph-frontend
+      - --image=${_REPO}/surggraph-frontend:${SHORT_SHA}
+      - --region=${_REGION}
+      - --port=8080
+
+images:
+  - ${_REPO}/surggraph-backend:${SHORT_SHA}
+  - ${_REPO}/surggraph-backend:latest
+  - ${_REPO}/surggraph-frontend:${SHORT_SHA}
+  - ${_REPO}/surggraph-frontend:latest

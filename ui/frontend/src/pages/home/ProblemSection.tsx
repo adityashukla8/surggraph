@@ -115,10 +115,7 @@ export function ProblemSection() {
             <h3 className="home__card-title">{c.title}</h3>
             <div className="home__card-body">{c.body}</div>
             <hr className="home__card-divider" />
-            <div className="home__card-pairing">
-              <span className="home__card-pairing-header">{c.benefitHeader}</span>
-              → {c.pairing}
-            </div>
+            <div className="home__card-pairing">→ {c.pairing}</div>
             <a href={c.citationHref} target="_blank" rel="noreferrer" className="home__card-citation">
               ↗ {c.citationLabel}
             </a>
