@@ -238,7 +238,17 @@ def _disclosure_for(tool_name: str) -> dict[str, str]:
 
 
 async def _send_json(websocket: WebSocket, payload: dict[str, Any]) -> None:
-    await websocket.send_text(json.dumps(payload))
+    try:
+        await websocket.send_text(json.dumps(payload))
+    except RuntimeError:
+        # Real production observation (Cloud Run logs, 2026-08-28): a client
+        # that disconnects mid-turn (closed tab, network drop, a test script
+        # ending early) races with an in-flight send — Starlette raises a
+        # plain RuntimeError ("Cannot call send once a close message has
+        # been sent"), not a catchable WebSocketDisconnect. This is the
+        # expected end of a turn whose client is already gone, not a real
+        # failure — logged at INFO, not surfaced as an unhandled exception.
+        logger.info("surgbot voice ws: dropped a send — client already disconnected")
 
 
 # Real user report this session: the model's markdown-formatted text (###
@@ -426,9 +436,34 @@ async def _send_turn_to_agent(
     )
     total_bytes = 0
     try:
-        async for chunk in speech.synthesize_speech_streaming(display_text):
-            total_bytes += len(chunk)
-            await websocket.send_bytes(chunk)
+        # Real production bug (Cloud Run logs, 2026-08-28): synthesize_
+        # speech_streaming wraps its own yield in an OTel
+        # start_as_current_span. Breaking/returning out of this loop early
+        # (disconnect, stop_narration cancellation) without explicitly
+        # closing the generator left it to Python's garbage collector to
+        # call aclose() at some arbitrary later point — in a DIFFERENT
+        # asyncio context than the one that opened the span, which OTel's
+        # context-detach raises a real ValueError over ("Token ... was
+        # created in a different Context"). contextlib.aclosing forces
+        # aclose() to run HERE, in this same task/context, the moment the
+        # loop exits for any reason.
+        async with contextlib.aclosing(speech.synthesize_speech_streaming(display_text)) as chunks:
+            async for chunk in chunks:
+                total_bytes += len(chunk)
+                try:
+                    await websocket.send_bytes(chunk)
+                except RuntimeError:
+                    # Same benign disconnect-mid-stream case _send_json
+                    # guards against — stop sending further chunks rather
+                    # than raising once per remaining chunk (real observed
+                    # behavior: this cascaded into 3 separate unhandled-
+                    # exception log entries from one root cause before this
+                    # fix).
+                    logger.info(
+                        "surgbot voice ws[%s]: client disconnected mid-narration, stopping TTS stream",
+                        state["session_id"],
+                    )
+                    return
     except Exception as exc:
         logger.exception("surgbot voice ws[%s]: synthesize_speech_streaming failed", state["session_id"])
         await _send_tool_call_finished(websocket, state, tts_call_id, f"error: {exc}")
