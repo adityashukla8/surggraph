@@ -1,0 +1,463 @@
+/* Architecture board — DOM + CSS Grid rather than a hand-positioned SVG.
+   Grid cannot overlap by construction, so the class of bug the SVG version
+   kept hitting (a label growing by one word and landing on its neighbour)
+   is not expressible here. Type is real browser type, so it stays legible
+   without being scaled by a viewBox. */
+
+/* .ab__flow is listed too because the walkthrough is also rendered on its own,
+   outside the board, on the home page — it has to bring the palette and the
+   type with it rather than inherit them from an ancestor that isn't there. */
+.ab,
+.ab__flow {
+  --ab-compute: #2a78d6;
+  --ab-model: #0b3a63;
+  --ab-data: #7c3aed;
+  --ab-gov: #d5578a;
+  --ab-ops: #1a8f1a;
+  --ab-external: #64748b;
+  --ab-user: #c98500;
+  --ab-agent: #2a78d6;
+  --ab-tool: #8b93a1;
+  --ab-det: #1a8f1a;
+  --ab-hitl: #c98500;
+
+  font-family: "Poppins", system-ui, sans-serif;
+  color: #0b1220;
+}
+
+/* ----------------------------------------------------------- legend */
+
+.ab__legend {
+  display: flex;
+  flex-wrap: wrap;
+  /* Under the diagram, at its right — a key to what you have just read
+     rather than a preamble to it. */
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+.ab__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #4b5563;
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  border-radius: 999px;
+  padding: 5px 12px 5px 9px;
+  white-space: nowrap;
+}
+.ab__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 2px solid currentColor;
+  flex-shrink: 0;
+}
+.ab__swatch--compute { color: var(--ab-compute); }
+.ab__swatch--model { color: var(--ab-model); }
+.ab__swatch--data { color: var(--ab-data); }
+.ab__swatch--gov { color: var(--ab-gov); }
+.ab__swatch--ops { color: var(--ab-ops); }
+.ab__swatch--external { color: var(--ab-external); }
+.ab__swatch--user { color: var(--ab-user); }
+
+/* ------------------------------------------------------------ stage */
+/* Externals sit in their own columns either side of the cloud boundary —
+   the same convention Google's reference diagrams use. */
+
+.ab__stage {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ab__ext {
+  display: flex;
+  flex-direction: column;
+  /* 70 + the 30px margin below = 100px apart, which spreads the four
+     externals down the board instead of stacking them in its top third:
+     GitHub lands level with the middle of the diagram, next to the delivery
+     panel it feeds, and Europe PMC drops to where the literature call
+     actually leaves the orchestrator. */
+  gap: 70px;
+  /* Puts SAR-RARP50's centre on Cloud Storage's, so step 1 is a straight
+     run into it rather than a jog through the 16px boundary corridor. The
+     column's 70px gap would otherwise strand the "External" heading up at the
+     top, so the heading pulls itself back down to its first card and this
+     padding absorbs the difference. */
+  padding-top: 123px;
+}
+.ab__ext > .ab__ext-title { margin-bottom: -62px; }
+.ab__ext-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8b93a1;
+}
+
+/* The surgeon sits above the boundary, not inside it: pulled out of the
+   normal flow and styled as an external card so the "outside Google Cloud"
+   reading survives the move. */
+.ab__ext-top {
+  position: absolute;
+  top: -104px;
+  /* Held off the boundary so line 10 has a lane to its right to turn into,
+     rather than doubling back through the card it just left. */
+  right: 20px;
+  width: 320px;
+  z-index: 2;
+}
+.ab__ext-top .ab__ext-title { display: block; margin-bottom: 8px; }
+
+.ab__cloud {
+  margin-top: 104px;
+  border: 1.5px dashed #94a3b8;
+  border-radius: 18px;
+  background: #f7fafd;
+  padding: 16px;
+}
+.ab__cloud-head {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 14px;
+}
+
+.ab__row {
+  display: grid;
+  gap: 34px;
+  /* Bands are separated enough for a connector to run between them without
+     touching either. */
+  margin-bottom: 48px;
+}
+/* The column gaps are routing channels, not just whitespace: line 5 runs down
+   the two-column gap and lines 11/15 down the three-column one. The columns
+   are 1fr, so widening a gap narrows the panels rather than the board. */
+.ab__row--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 64px; }
+/* Top-aligned and content-sized. Equal-height was forcing Cloud Storage to
+   match the taller frontend card and left it mostly empty. */
+.ab__row--even > .ab__card { align-self: start; }
+.ab__row--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 52px; }
+/* Eight connectors cross the band between the workflow panels and Shared
+   services, more than fit on one line of labels — so it is deep enough for
+   two. */
+.ab__row--band { margin-bottom: 84px; }
+/* Nothing follows the last row inside a panel, so the full band gap just
+   leaves an empty strip above the panel's floor. */
+.ab__panel > .ab__row:last-child { margin-bottom: 24px; }
+
+/* ----------------------------------------------------------- panels */
+
+.ab__panel {
+  border: 1px solid #dbe4f0;
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+.ab__panel--graph { background: #eef4fc; border-color: #b9d3f0; }
+.ab__panel--bot { background: #eef7f1; border-color: #a7d7bd; }
+.ab__panel--shared { background: #f8f6fd; border-color: #d3c2f5; margin-bottom: 14px; }
+.ab__panel--ops { background: #f2faf3; border-color: #b6dfc0; }
+
+.ab__panel h4 {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.ab__panel h4 span {
+  font-weight: 500;
+  font-size: 11.5px;
+  color: #64748b;
+  margin-left: 6px;
+}
+.ab__panel-note b { color: #0b1220; font-weight: 700; }
+.ab__panel-note {
+  margin: 14px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.ab__sub { display: flex; flex-direction: column; gap: 30px; }
+/* Boxed so Models / State / Governance read as three groups rather than
+   three loose stacks that happen to sit side by side. */
+.ab__sub--boxed {
+  border-radius: 12px;
+  padding: 14px;
+  gap: 26px;
+  border: 1px solid;
+}
+/* Each group gets its own pastel, keyed to the kind of thing it holds:
+   models blue, state violet, governance rose — the same hues the legend
+   already uses, at a much lighter weight. */
+.ab__sub--models { background: #eef5fd; border-color: #cfe0f5; }
+.ab__sub--state { background: #f6f2fe; border-color: #ddd0f7; }
+.ab__sub--gov { background: #fdf1f6; border-color: #f5d3e2; }
+.ab__sub--boxed .ab__sub-title { margin-bottom: -12px; }
+.ab__sub-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8b93a1;
+}
+
+/* ------------------------------------------------------------ cards */
+
+.ab__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  border-radius: 10px;
+  padding: 11px 13px;
+}
+
+.ab__panel .ab__card + .ab__card,
+.ab__sub .ab__card + .ab__card { margin-top: 0; }
+/* Vertical stacks only — never grid rows, whose gap already spaces them. */
+.ab__ext > .ab__card + .ab__card,
+.ab__sub > .ab__card + .ab__card,
+.ab__panel > .ab__card + .ab__card { margin-top: 30px; }
+
+.ab__card--compute { border-color: color-mix(in srgb, var(--ab-compute) 34%, #e3e8f0); }
+.ab__card--model { border-color: color-mix(in srgb, var(--ab-model) 34%, #e3e8f0); }
+.ab__card--data { border-color: color-mix(in srgb, var(--ab-data) 34%, #e3e8f0); }
+.ab__card--gov { border-color: color-mix(in srgb, var(--ab-gov) 34%, #e3e8f0); }
+.ab__card--ops { border-color: color-mix(in srgb, var(--ab-ops) 34%, #e3e8f0); }
+.ab__card--external { border-color: color-mix(in srgb, var(--ab-external) 34%, #e3e8f0); }
+.ab__card--user { border-color: color-mix(in srgb, var(--ab-user) 34%, #e3e8f0); }
+
+/* No tile behind the mark: these are already product logos with their own
+   shape and colour, and a grey rounded square behind them read as a badge on
+   a badge. */
+.ab__icon {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ab__icon img { width: 24px; height: 24px; object-fit: contain; }
+/* Externals stay a touch smaller — they sit outside the boundary and should
+   not compete with the services inside it. */
+.ab__icon--plain { width: 22px; height: 22px; }
+.ab__icon--plain img { width: 19px; height: 19px; }
+/* A monogram has no shape of its own, so it keeps a tile to sit in. */
+.ab__mono {
+  font-size: 9.5px;
+  font-weight: 800;
+  color: #64748b;
+  background: #f3f6fb;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ab__card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ab__card-text b { font-size: 12.5px; font-weight: 700; line-height: 1.3; }
+.ab__card-text i { font-size: 11px; font-style: normal; color: #4b5563; line-height: 1.4; }
+.ab__card-text em { font-size: 10.5px; font-style: normal; color: #8b93a1; line-height: 1.4; }
+
+/* ------------------------------------------------------------- chips */
+/* What runs inside a service, listed on it rather than exploded into a box
+   each — a box per agent turns an architecture diagram into an inventory. */
+
+.ab__chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.ab__chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  color: #4b5563;
+}
+.ab__chip--agent { border-color: color-mix(in srgb, var(--ab-agent) 42%, #fff); color: var(--ab-agent); }
+.ab__chip--tool { border-color: color-mix(in srgb, var(--ab-tool) 55%, #fff); color: #64748b; }
+.ab__chip--det { border-color: color-mix(in srgb, var(--ab-det) 42%, #fff); color: var(--ab-det); }
+.ab__chip--hitl { border-color: color-mix(in srgb, var(--ab-hitl) 50%, #fff); color: var(--ab-hitl); }
+
+/* -------------------------------------------------------------- flow */
+/* The numbered walkthrough Google's own reference diagrams pair with the
+   picture — it carries the sequence without drawing 14 crossing arrows. */
+
+.ab__flow {
+  margin-top: 22px;
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  border-radius: 16px;
+  padding: 20px 22px;
+}
+.ab__flow-title { margin: 0 0 14px; font-size: 14px; font-weight: 700; }
+.ab__flow-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* Column-major: the steps read 1-2-3 down the left column, then 4-5-6 down
+     the right. grid-template-rows is set inline from CONNS.length. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 10px 28px;
+}
+@media (max-width: 900px) {
+  .ab__flow-list { grid-auto-flow: row; grid-template-rows: none !important; }
+}
+.ab__flow-list li { display: flex; gap: 10px; font-size: 11.5px; line-height: 1.5; color: #4b5563; }
+.ab__flow-list b { display: block; color: #0b1220; font-size: 12px; }
+.ab__flow-num {
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+  border-radius: 999px;
+  background: var(--ab-compute);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ab__flow-hitl .ab__flow-num { background: var(--ab-hitl); }
+
+/* ------------------------------------------------------------ narrow */
+/* Stack the external columns above and below rather than shrinking them
+   into unreadable slivers. */
+@media (max-width: 1100px) {
+  .ab__stage { grid-template-columns: 1fr; }
+  .ab__ext { padding-top: 0; flex-direction: row; flex-wrap: wrap; }
+  .ab__ext .ab__card { flex: 1 1 260px; }
+  .ab__row--2, .ab__row--3 { grid-template-columns: 1fr; }
+}
+
+/* This page carries a wide diagram, so it gets more room than the marketing
+   sections' 1240px. */
+.arch__section { max-width: 1680px; }
+
+/* Panels size to their own content instead of stretching to the tallest —
+   SurgBot has half SurgGraph's component list and was rendering as a mostly
+   empty box. */
+.ab__row { align-items: start; }
+
+/* -------------------------------------------------------------- wires */
+/* Arrows are a real SVG overlay whose coordinates are measured from the
+   rendered DOM (see ArchitectureBoard's ResizeObserver). Layout stays CSS
+   Grid — which cannot overlap — while the flow is still drawn. */
+
+.ab__stage { position: relative; }
+
+/* THREE layers, and the order is the whole trick:
+     0  panel backgrounds — opaque, so anything below them is invisible
+     1  the wires
+     2  the cards
+   The wires were at 0 and were being painted over by the cloud panel's own
+   background, which is why only the numbered markers were visible. */
+.ab__cloud, .ab__ext, .ab__panel, .ab__sub { position: relative; z-index: 0; }
+.ab__wires {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+/* Cards above the wires, so a line passes behind a box and never across its
+   text. */
+.ab__card, .ab__chip, .ab__cloud-head, .ab__panel h4, .ab__sub-title, .ab__panel-note {
+  position: relative;
+  z-index: 2;
+}
+
+.ab { position: relative; }
+.ab__wire-labels { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+/* Number AND text, like the SVG version: a bare marker gave no clue what the
+   step was. Placed on the longest straight run of its path, which is where
+   there is open space, and layered above the cards so it is never clipped. */
+.ab__wire-labels { z-index: 3; }
+.ab__wire-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #334155;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 1px 8px 1px 2px;
+  box-shadow: 0 1px 4px rgba(12, 20, 34, 0.13);
+}
+.ab__wire-label b {
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: #0b1220;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  /* Flex centring centres the LINE box, and at line-height:normal that box
+     carries the font's descender slack under the digits — which have no
+     descender — so the number rides high in the circle. Collapsing the line
+     box to the digits and nudging down by the leftover slack centres the ink
+     itself, which is what the eye reads. */
+  line-height: 1;
+  padding-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ab__wire-label--accent { border-color: #7c3aed; color: #7c3aed; }
+.ab__wire-label--accent b { background: #5b21b6; }
+.ab__wire-label--hitl { border-color: #c98500; color: #b07400; }
+.ab__wire-label--hitl b { background: #8f5d00; }
+
+/* Wires would be meaningless once the columns stack. */
+@media (max-width: 1100px) {
+  .ab__wires, .ab__wire-labels { display: none; }
+}
+
+/* ------------------------------------------------- home-page still */
+/* A clickable still of the board on the home page. The image is a 4K export,
+   so it is scaled down here and stays sharp on a HiDPI screen. */
+.arch__shot {
+  position: relative;
+  display: block;
+  border: 1px solid #e3e8f0;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.arch__shot:hover { border-color: #b9d3f0; box-shadow: 0 6px 24px rgba(12, 20, 34, 0.1); }
+.arch__shot img { display: block; width: 100%; height: auto; }
+.arch__shot-hint {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 6px 12px;
+  box-shadow: 0 1px 4px rgba(12, 20, 34, 0.13);
+}
+.arch__shot:hover .arch__shot-hint { color: #2a78d6; border-color: #b9d3f0; }
+/* Room between the still and the list that explains it. */
+#architecture .ab__flow { margin-top: 26px; }

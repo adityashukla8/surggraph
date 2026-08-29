@@ -1,108 +1,124 @@
-import { useMemo } from "react";
-import { ReactFlow, Background, type Node, type Edge, Position, MarkerType } from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import { type Node, type Edge } from "@xyflow/react";
+import { Position } from "@xyflow/react";
+import {
+  ARROW,
+  DASHED,
+  FONT,
+  GAP,
+  GROUP_PAD_BOTTOM,
+  GROUP_PAD_TOP,
+  GROUP_PAD_X,
+  type Kind,
+  NEUTRAL,
+  NODE_H,
+  NODE_STYLE_BASE,
+  WEIGHT,
+  componentNodeStyle,
+  containerStyle,
+  edgeLabelBg,
+  edgeLabelStyle,
+  rowLayout,
+  FlowCanvas,
+} from "./flowTheme";
 
-// A real ReactFlow instance (the same library the actual console graph at
-// /console runs on — see ui/frontend/src/graph/), not a CSS mockup, laying
-// out the 5 real stages data moves through: patient data + surgical video
-// feeding Gemini, the shared Living State Graph every one of the 9 real
-// specialist agents reads/writes through, and the 3 real downstream
-// surfaces that graph drives — the dashboard, the human-in-the-loop gate,
-// and the FHIR write.
+// SurgGraph — the autonomous pipeline, as a real ReactFlow instance (the same
+// library the live console graph runs on, see ui/frontend/src/graph/), not a
+// CSS mockup.
 //
-// The 9-agent layer is deliberately split across two rows (5 + 4) rather
-// than one long row of 9 — half as many columns means each node (and its
-// label) can render roughly twice as large once ReactFlow's fitView
-// computes zoom, since zoom is driven by the widest row in the diagram.
+// Components are colour-coded by WHAT THEY ACTUALLY ARE. Only 8 of the 11
+// reason with an LLM; Literature Retrieval is a real API tool with no model,
+// and Alert Routing and the Verification Gate are deterministic by design —
+// consensus arithmetic and a fail-closed safety gate are things a model
+// should never be doing. Error Detection is drawn as its three real
+// sub-agents rather than one box, because each is a separate Gemini call over
+// the same frames from a different angle, and no single one can raise an
+// error alone.
+//
+// The 11 sit inside one container node (a real ReactFlow parent, via
+// parentId) so the state graph fans into a single box: one arrow in instead
+// of eleven crossing the diagram. The 4/4/3 split keeps the widest row
+// narrow — that row drives fitView zoom, so it sets how large every label
+// renders — and groups them as perceive, then reason, then act.
 
 const CENTER_X = 460;
 
-function rowLayout(count: number, width: number, gap: number) {
-  const total = count * width + (count - 1) * gap;
-  const startX = CENTER_X - total / 2;
-  return Array.from({ length: count }, (_, i) => startX + i * (width + gap));
-}
-
-const NODE_STYLE_BASE: React.CSSProperties = {
-  borderRadius: 12,
-  padding: "14px 20px",
-  fontFamily: "Poppins, sans-serif",
-  fontWeight: 700,
-  fontSize: 16,
-  border: "1.5px solid #e3e8f0",
-  background: "#fff",
-  color: "#0b1220",
-  textAlign: "center",
-};
-
 const MAIN_WIDTH = 300;
-const [patientX, videoX] = rowLayout(2, MAIN_WIDTH, 40);
+const [patientX, videoX] = rowLayout(2, MAIN_WIDTH, GAP.inputX, CENTER_X);
 const mainChainX = CENTER_X - MAIN_WIDTH / 2;
 
-const AGENTS = [
-  { name: "Perception", color: "var(--home-aqua)" },
-  { name: "Error Detection", color: "var(--home-orange)" },
-  { name: "Complication Reasoning", color: "var(--home-red)" },
-  { name: "Literature Retrieval", color: "var(--home-accent)" },
-  { name: "Corrective Replanning", color: "var(--home-magenta)" },
-  { name: "Divergence Detection", color: "var(--home-accent-dark)" },
-  { name: "Alert Routing", color: "var(--home-yellow)" },
-  { name: "Documentation", color: "var(--home-aqua)" },
-  { name: "Verification Gate", color: "var(--home-green)" },
+const COMPONENTS: { name: string; kind: Kind }[] = [
+  // Perceive
+  { name: "Perception Agent", kind: "agent" },
+  { name: "Temporal Agent", kind: "agent" },
+  { name: "Spatial Agent", kind: "agent" },
+  { name: "Procedural Agent", kind: "agent" },
+  // Reason
+  { name: "Complication Reasoning Agent", kind: "agent" },
+  { name: "Literature Retrieval", kind: "tool" },
+  { name: "Corrective Replanning Agent", kind: "agent" },
+  { name: "Divergence Detection Agent", kind: "agent" },
+  // Act
+  { name: "Alert Routing", kind: "deterministic" },
+  { name: "Documentation Agent", kind: "agent" },
+  { name: "Verification Gate", kind: "deterministic" },
 ];
-const AGENTS_ROW1 = AGENTS.slice(0, 5);
-const AGENTS_ROW2 = AGENTS.slice(5);
-const AGENT_WIDTH = 150;
-const AGENT_GAP = 16;
-const agentRow1Xs = rowLayout(AGENTS_ROW1.length, AGENT_WIDTH, AGENT_GAP);
-const agentRow2Xs = rowLayout(AGENTS_ROW2.length, AGENT_WIDTH, AGENT_GAP);
 
-const OUTPUT_WIDTH = 220;
-const [dashboardX, hitlX, fhirX] = rowLayout(3, OUTPUT_WIDTH, 30);
+const ROW1 = COMPONENTS.slice(0, 4);
+const ROW2 = COMPONENTS.slice(4, 8);
+const ROW3 = COMPONENTS.slice(8);
+const NODE_W = 158;
+const row1Xs = rowLayout(ROW1.length, NODE_W, GAP.componentX, CENTER_X);
+const row2Xs = rowLayout(ROW2.length, NODE_W, GAP.componentX, CENTER_X);
+const row3Xs = rowLayout(ROW3.length, NODE_W, GAP.componentX, CENTER_X);
+
+const OUTPUT_WIDTH = 200;
+const [dashboardX, hitlX, fhirX] = rowLayout(3, OUTPUT_WIDTH, GAP.outputX, CENTER_X);
 
 const Y_INPUT = 0;
-const Y_GEMINI = 140;
-const Y_GRAPH = 280;
-const Y_AGENTS_ROW1 = 430;
-const Y_AGENTS_ROW2 = 530;
-const Y_OUTPUT = 680;
+const Y_MODELS = GAP.stackY;
+const Y_GRAPH = GAP.stackY * 2;
 
-const agentNodeStyle = (color: string): React.CSSProperties => ({
-  ...NODE_STYLE_BASE,
-  width: AGENT_WIDTH,
-  fontSize: 13.5,
-  fontWeight: 700,
-  lineHeight: 1.3,
-  whiteSpace: "normal",
-  padding: "12px 12px",
-  borderColor: color,
-  color: "#0b1220",
-});
+const GROUP_W = 4 * NODE_W + 3 * GAP.componentX + GROUP_PAD_X * 2;
+const GROUP_H = GROUP_PAD_TOP + 2 * GAP.componentY + NODE_H + GROUP_PAD_BOTTOM;
+const GROUP_X = CENTER_X - GROUP_W / 2;
+const GROUP_Y = Y_GRAPH + GAP.beforeGroup;
+
+const Y_ROW1 = GROUP_PAD_TOP;
+const Y_ROW2 = GROUP_PAD_TOP + GAP.componentY;
+const Y_ROW3 = GROUP_PAD_TOP + 2 * GAP.componentY;
+const Y_OUTPUT = GROUP_Y + GROUP_H + GAP.afterGroup;
+
+const rel = (absX: number) => absX - GROUP_X;
+const componentNodes = [
+  ...ROW1.map((c, i) => ({ c, x: rel(row1Xs[i]), y: Y_ROW1, i })),
+  ...ROW2.map((c, i) => ({ c, x: rel(row2Xs[i]), y: Y_ROW2, i: i + ROW1.length })),
+  ...ROW3.map((c, i) => ({ c, x: rel(row3Xs[i]), y: Y_ROW3, i: i + ROW1.length + ROW2.length })),
+];
 
 const nodes: Node[] = [
   {
     id: "patient",
     position: { x: patientX, y: Y_INPUT },
     data: { label: "Patient Data" },
-    style: { ...NODE_STYLE_BASE, width: MAIN_WIDTH, borderColor: "#59c3e6" },
+    style: { ...NODE_STYLE_BASE, width: MAIN_WIDTH, borderColor: NEUTRAL },
     sourcePosition: Position.Bottom,
   },
   {
     id: "video",
     position: { x: videoX, y: Y_INPUT },
     data: { label: "Surgical Video" },
-    style: { ...NODE_STYLE_BASE, width: MAIN_WIDTH, borderColor: "#1baf7a" },
+    style: { ...NODE_STYLE_BASE, width: MAIN_WIDTH, borderColor: NEUTRAL },
     sourcePosition: Position.Bottom,
   },
   {
-    id: "gemini",
-    position: { x: mainChainX, y: Y_GEMINI },
+    id: "models",
+    position: { x: mainChainX, y: Y_MODELS },
     data: {
       label: (
         <div>
-          <div>Gemini 3.5</div>
-          <div style={{ fontWeight: 500, fontSize: 13, opacity: 0.85, marginTop: 3 }}>
-            Multimodal · Vertex AI · 9 specialist agents
+          <div>Gemini 3.5 · MedGemma 4B</div>
+          <div style={{ fontWeight: WEIGHT, fontSize: FONT.mainSub, opacity: 0.85, marginTop: 3 }}>
+            Multimodal · Vertex AI · 8 reasoning agents
           </div>
         </div>
       ) as unknown as string,
@@ -125,19 +141,24 @@ const nodes: Node[] = [
     targetPosition: Position.Top,
     sourcePosition: Position.Bottom,
   },
-  ...AGENTS_ROW1.map((a, i) => ({
-    id: `agent-${i}`,
-    position: { x: agentRow1Xs[i], y: Y_AGENTS_ROW1 },
-    data: { label: a.name },
-    style: agentNodeStyle(a.color),
+  {
+    // A real ReactFlow parent node, not a drawn rectangle: the 11 components
+    // declare it via parentId, so they are positioned relative to it.
+    id: "components",
+    position: { x: GROUP_X, y: GROUP_Y },
+    // Unlabelled: the header above the canvas already names the workflow
+    // and its platform, so a label here would only repeat it.
+    data: { label: "" },
+    style: containerStyle(GROUP_W, GROUP_H),
     targetPosition: Position.Top,
-    sourcePosition: Position.Top,
-  })),
-  ...AGENTS_ROW2.map((a, i) => ({
-    id: `agent-${i + AGENTS_ROW1.length}`,
-    position: { x: agentRow2Xs[i], y: Y_AGENTS_ROW2 },
-    data: { label: a.name },
-    style: agentNodeStyle(a.color),
+    sourcePosition: Position.Bottom,
+  },
+  ...componentNodes.map(({ c, x, y, i }) => ({
+    id: `agent-${i}`,
+    parentId: "components",
+    position: { x, y },
+    data: { label: c.name },
+    style: componentNodeStyle(c.kind, NODE_W),
     targetPosition: Position.Top,
     sourcePosition: Position.Top,
   })),
@@ -145,69 +166,59 @@ const nodes: Node[] = [
     id: "dashboard",
     position: { x: dashboardX, y: Y_OUTPUT },
     data: { label: "Dashboard" },
-    style: { ...NODE_STYLE_BASE, width: OUTPUT_WIDTH, borderColor: "#4a3aa7" },
+    style: { ...NODE_STYLE_BASE, width: OUTPUT_WIDTH, borderColor: NEUTRAL },
     targetPosition: Position.Top,
   },
   {
     id: "hitl",
     position: { x: hitlX, y: Y_OUTPUT },
     data: { label: "Human in the Loop" },
-    style: { ...NODE_STYLE_BASE, width: OUTPUT_WIDTH, borderColor: "#2a78d6" },
+    style: { ...NODE_STYLE_BASE, width: OUTPUT_WIDTH, borderColor: "#c98500" },
     targetPosition: Position.Top,
   },
   {
+    // The one node that leaves the system: a real DocumentReference /
+    // Communication written to a live external FHIR server and read back to
+    // verify it landed.
     id: "fhir",
     position: { x: fhirX, y: Y_OUTPUT },
     data: { label: "FHIR Write" },
-    style: { ...NODE_STYLE_BASE, width: OUTPUT_WIDTH, borderColor: "#1baf7a" },
+    style: { ...NODE_STYLE_BASE, width: OUTPUT_WIDTH, borderColor: "#d5578a" },
     targetPosition: Position.Top,
   },
 ];
 
-const dashed = { stroke: "#94a3b8", strokeDasharray: "4 3" };
-const arrow = { type: MarkerType.ArrowClosed, color: "#94a3b8" };
-
 const edges: Edge[] = [
-  { id: "e-patient-gemini", source: "patient", target: "gemini", animated: true, style: dashed, markerEnd: arrow },
-  { id: "e-video-gemini", source: "video", target: "gemini", animated: true, style: dashed, markerEnd: arrow },
-  { id: "e-gemini-graph", source: "gemini", target: "graph", animated: true, style: dashed, markerEnd: arrow },
-  ...AGENTS.map((_, i) => ({
-    id: `e-graph-agent-${i}`,
+  { id: "e-patient-models", source: "patient", target: "models", animated: true, style: DASHED, markerEnd: ARROW },
+  { id: "e-video-models", source: "video", target: "models", animated: true, style: DASHED, markerEnd: ARROW },
+  { id: "e-models-graph", source: "models", target: "graph", animated: true, style: DASHED, markerEnd: ARROW },
+  // Bidirectional: every component reads its context from the graph and
+  // writes its findings back to it.
+  {
+    id: "e-graph-components",
     source: "graph",
-    target: `agent-${i}`,
-    style: { stroke: "#94a3b8", strokeWidth: 1.3 },
-    markerEnd: arrow,
-    markerStart: arrow,
-  })),
-  { id: "e-graph-dashboard", source: "graph", target: "dashboard", animated: true, style: dashed, markerEnd: arrow },
-  { id: "e-graph-hitl", source: "graph", target: "hitl", animated: true, style: dashed, markerEnd: arrow },
-  { id: "e-graph-fhir", source: "graph", target: "fhir", animated: true, style: dashed, markerEnd: arrow },
+    target: "components",
+    style: { stroke: "#94a3b8", strokeWidth: 1.5 },
+    markerEnd: ARROW,
+    markerStart: ARROW,
+  },
+  { id: "e-components-dashboard", source: "components", target: "dashboard", animated: true, style: DASHED, markerEnd: ARROW },
+  { id: "e-components-hitl", source: "components", target: "hitl", animated: true, style: DASHED, markerEnd: ARROW },
+  { id: "e-components-fhir", source: "components", target: "fhir", animated: true, style: DASHED, markerEnd: ARROW },
 ];
 
-export function PipelineFlow({ height = 700 }: { height?: number }) {
-  const fitViewOptions = useMemo(() => ({ padding: 0.08 }), []);
+// Kept so the shared caption/edge-label styling is exercised from one place.
+void edgeLabelStyle;
+void edgeLabelBg;
+
+export function PipelineFlow({ height = 640 }: { height?: number }) {
   return (
-    <div style={{ position: "relative", height, borderRadius: 14, overflow: "hidden", background: "#f8fafc" }}>
-      <span className="home__flow-tag">Powered by Vertex AI + Cloud Run</span>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        fitView
-        fitViewOptions={fitViewOptions}
-        minZoom={0.1}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        panOnDrag={false}
-        panOnScroll={false}
-        zoomOnScroll={false}
-        zoomOnPinch={false}
-        zoomOnDoubleClick={false}
-        preventScrolling={false}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background gap={16} color="#dbe4f0" />
-      </ReactFlow>
-    </div>
+    <FlowCanvas
+      nodes={nodes}
+      edges={edges}
+      height={height}
+      title="SurgGraph: The Autonomous Workflow"
+      platform="Powered by Cloud Run + Vertex AI"
+    />
   );
 }

@@ -16,8 +16,8 @@ const CARDS: SolutionCard[] = [
     title: "The Autonomous Workflow",
     subtitle: "Core TaskMaster submission",
     bullets: [
-      "9 specialist agents reason live over surgical video",
-      "Detects errors → reasons complications → drafts corrective plans",
+      "8 specialist agents reason over surgical video (5s windowed frames)",
+      "Detects errors → reasons complications → drafts corrective plans → tracks surgery → alerts on divergances  ",
       "Writes FHIR records + alerts, fail-closed by design",
     ],
     icon: (
@@ -39,7 +39,7 @@ const CARDS: SolutionCard[] = [
     title: "The Feedback Workflow",
     bullets: [
       "Conversational, voice-driven review of a completed case with a surgeon",
-      "Captures structured agree / disagree feedback per finding",
+      "Captures structured feedback per finding",
       "Drafts an approvable case-review document",
     ],
     icon: (
@@ -61,7 +61,7 @@ const CARDS: SolutionCard[] = [
     bullets: [
       "Approved feedback is routed and stored as retrievable knowledge",
       "SurgGraph's agents consult it on every future case",
-      "State-driven — routed from real case graph data",
+      "Entirely shared state-driven — routed from real case graph data",
       "Advisory only — never auto-suppresses a live alert",
     ],
     icon: (

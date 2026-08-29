@@ -64,6 +64,16 @@
   max-width: 640px;
 }
 
+/* An inline link inside body copy — the nav and button styles are both too
+   loud for a sentence. */
+.home__link {
+  color: var(--home-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.home__link:hover { text-decoration-thickness: 2px; }
+
 .home__lede-list {
   margin: 0;
   padding-left: 20px;
@@ -769,19 +779,14 @@
   margin: 0 0 34px;
 }
 
+/* Single column: the diagram is the whole content now, so it gets the full
+   width. It used to share a two-column grid with a prose list. */
 .home__pipeline-card {
   background: var(--home-surface);
   border: 1px solid var(--home-border);
   border-radius: 18px;
   padding: 32px;
   margin-bottom: 22px;
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
-  gap: 32px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .home__pipeline-card { grid-template-columns: 1fr; }
 }
 
 .home__pill {
@@ -815,8 +820,10 @@
 
 .home__step-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
+  /* Five stages, one row — the sequence reads left to right, so wrapping the
+     last one onto its own line would break the run. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
 }
 @media (max-width: 1100px) {
   .home__step-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -831,11 +838,9 @@
   overflow: hidden;
 }
 
+/* Kept for reuse, but currently unrendered: each workflow container now
+   states its own platform in its own label, so there is no floating tag. */
 .home__flow-tag {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  z-index: 5;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -845,6 +850,100 @@
   border: 1px solid var(--home-border);
   border-radius: 999px;
   padding: 5px 12px;
+}
+
+/* Legend for PipelineFlow's kind colour-coding. Sits ABOVE the canvas rather
+   than floating over it — it is a key to the whole diagram, so it should not
+   overlap the nodes it explains or be clipped by the canvas's overflow.
+   Swatches are hollow rings, matching how the nodes themselves are coloured
+   (border, not fill), so the key looks like what it labels. */
+/* One legend for both workflow containers. */
+.home__flow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+/* The two workflows sit side by side, each in its own grey canvas. SurgGraph
+   is wider because its component grid is 4 across; SurgBot is a single
+   column, so it needs roughly half the room. */
+.home__flow-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+/* Below this the two canvases stack, each getting the full card width. That
+   alone is not enough on a phone: a ~700px-wide diagram squeezed into a
+   ~330px column zooms to under half scale and the labels become unreadable,
+   while the fixed canvas height leaves a band of dead space above and below.
+   So each panel scrolls horizontally instead, holding the diagram at a
+   legible minimum width — the usual treatment for a wide diagram on a narrow
+   screen, and it keeps the canvas filled rather than letterboxed. */
+@media (max-width: 900px) {
+  .home__flow-split { grid-template-columns: 1fr; gap: 24px; }
+  .home__flow-panel { overflow-x: auto; }
+  .home__flow-canvas { min-width: 560px; }
+  /* Horizontal scroll is not discoverable on touch without saying so. */
+  .home__flow-panel::after {
+    content: "swipe to see the full diagram →";
+    display: block;
+    padding-top: 8px;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--home-text-muted);
+    text-align: center;
+  }
+  /* Five legend chips at full size wrap to five rows on a phone. */
+  .home__flow-legend { gap: 6px; }
+  .home__flow-legend-item { font-size: 10.5px; padding: 4px 9px 4px 7px; }
+}
+
+.home__flow-caption {
+  display: block;
+  margin: 0 0 10px;
+  text-align: center;
+}
+.home__flow-caption-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--home-text);
+}
+.home__flow-caption-platform {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--home-text-muted);
+}
+
+/* Nothing here is interactive (nodesConnectable is off), so the connection
+   handles are pure visual noise — the dots that used to sit on every node. */
+.home__pipeline-card .react-flow__handle {
+  opacity: 0;
+}
+.home__flow-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--home-text-secondary);
+  background: #fff;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  padding: 5px 12px 5px 9px;
+  white-space: nowrap;
+}
+.home__flow-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 2px solid currentColor;
+  background: #fff;
+  flex-shrink: 0;
 }
 
 .home__step-card {
@@ -1025,7 +1124,7 @@
      row start so a card never stretches to match a taller neighbour. */
   align-items: start;
 }
-@media (max-width: 1100px) {
+@media (max-width: 1240px) {
   .home__agent-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 820px) {
@@ -1132,6 +1231,19 @@
   color: var(--home-text-muted);
 }
 
+/* Accent-coloured, unlike .home__tech-category-label's muted grey: these name
+   the two workflows, so they should read as headings rather than as quiet
+   dividers. Same treatment as .home__eyebrow, one step smaller. */
+.home__agent-group-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--home-accent);
+  margin-bottom: 14px;
+}
+
 .home__agent-group { margin-bottom: 44px; }
 .home__agent-group:last-child { margin-bottom: 0; }
 
@@ -1183,6 +1295,9 @@
 }
 .home__agent-card-body-inner { padding-top: 12px; border-top: 1px dashed var(--home-border); }
 .home__agent-card .home__agent-key { margin-bottom: 6px; }
+/* Tags now live in the collapsed card, so they sit tighter under the model
+   pill than the shared .home__tag-row default allows. */
+.home__agent-card .home__tag-row { margin-top: 10px; gap: 5px; }
 
 @media (prefers-reduced-motion: reduce) {
   .home__agent-card-body { transition: opacity 0.01s, visibility 0.01s; transform: none; }
@@ -1280,3 +1395,18 @@
 }
 .home__footer-inner a { color: var(--home-text-muted); }
 .home__footer-inner a:hover { color: var(--home-accent); }
+
+/* ------------------------------------------------------- Architecture page */
+
+/* The diagram is authored at a fixed 1720px canvas. On anything narrower it
+   scrolls horizontally rather than scaling down into illegibility — the same
+   treatment the workflow diagrams get on mobile. */
+.arch__frame {
+  background: #fff;
+  border: 1px solid var(--home-border);
+  border-radius: 18px;
+  padding: 18px;
+  overflow-x: auto;
+}
+.arch__frame > svg { min-width: 1200px; }
+.arch__frame > .ab { min-width: 1080px; }

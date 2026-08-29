@@ -202,9 +202,10 @@ const SURGBOT_AGENTS: AgentCard[] = [
   },
 ];
 
-// Progressive disclosure: the collapsed card carries identity (number, name,
-// kind, model) and the detail panel opens on hover or keyboard focus. The
-// panel is absolutely positioned so an open card never reflows the grid
+// Progressive disclosure: the collapsed card carries everything scannable —
+// number, kind, name, model and the descriptive tags — and only the code
+// identifier and the prose description wait behind hover or keyboard focus.
+// The panel is absolutely positioned so an open card never reflows the grid
 // around it, and `@media (hover: none)` in home.css keeps the full content
 // permanently visible on touch, where hover does not exist.
 function AgentGrid({ agents }: { agents: AgentCard[] }) {
@@ -225,15 +226,16 @@ function AgentGrid({ agents }: { agents: AgentCard[] }) {
             {a.model}
           </span>
 
+          <div className="home__tag-row">
+            {a.tags.map((t) => (
+              <span className="home__tag" key={t}>{t}</span>
+            ))}
+          </div>
+
           <div className="home__agent-card-body">
             <div className="home__agent-card-body-inner">
               <div className="home__agent-key">{a.key}</div>
               <p className="home__agent-desc">{a.desc}</p>
-              <div className="home__tag-row">
-                {a.tags.map((t) => (
-                  <span className="home__tag" key={t}>{t}</span>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -256,14 +258,9 @@ export function AgentsSection() {
             probabilistic reasoning, but never a probabilistic execution path. 
           </p>
           <p className="home__agent-root-desc">
-            <b>SurgBot</b> is the conversational half, where
-            a surgeon reviews what the pipeline decided and their feedback becomes knowledge the next case inherits.
+            <b>SurgBot</b> is the conversational feedback layer - 
+            surgeon reviews what SurgGraph detected and their feedback becomes knowledge the next case inherits.
           </p>
-          <div className="home__tag-row">
-            <span className="home__tag">Parallel delegation</span>
-            <span className="home__tag">Event bus, not polling</span>
-            <span className="home__tag">Deterministic control flow</span>
-          </div>
         </div>
         <div className="home__orchestrator-flow-wrap">
           <OrchestratorFlow />
@@ -271,12 +268,12 @@ export function AgentsSection() {
       </div>
 
       <div className="home__agent-group">
-        <span className="home__tech-category-label">SurgGraph — autonomous pipeline</span>
+        <span className="home__agent-group-label">SurgGraph — autonomous pipeline</span>
         <AgentGrid agents={SURGGRAPH_AGENTS} />
       </div>
 
       <div className="home__agent-group">
-        <span className="home__tech-category-label">SurgBot — conversational review</span>
+        <span className="home__agent-group-label">SurgBot — conversational review</span>
         <AgentGrid agents={SURGBOT_AGENTS} />
       </div>
     </section>

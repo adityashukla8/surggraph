@@ -1,4 +1,6 @@
+import { FlowLegend } from "./flowTheme";
 import { PipelineFlow } from "./PipelineFlow";
+import { SurgBotPipelineFlow } from "./SurgBotPipelineFlow";
 
 interface StepCard {
   num: string;
@@ -42,31 +44,33 @@ const STEPS: StepCard[] = [
     desc: "Every external write passes both a structural evidence gate and a content-safety layer before it leaves the system.",
     tags: ["Model Armor", "Human-in-the-Loop", "Fail-closed Design"],
   },
+  {
+    num: "05",
+    color: "var(--home-violet)",
+    label: "Review",
+    title: "SurgBot + Feedback Loop",
+    desc: "The surgeon reviews the filed case by voice. Approved feedback becomes durable knowledge that four SurgGraph agents read on the next case.",
+    tags: ["Voice Review", "4 Subagents on Agent Runtime", "Memory Bank", "Approval-gated", "Advisory-only"],
+  },
 ];
 
 export function HowItWorksSection() {
   return (
     <section className="home__section" id="how-it-works">
-      <span className="home__eyebrow">SurgGraph</span>
-      <h2 className="home__headline" style={{ fontSize: 38, margin: "0 0 8px" }}>
-        The Autonomous Workflow
+      <span className="home__eyebrow">How it Works</span>
+      <h2 className="home__headline" style={{ fontSize: 38, margin: "0 0 20px" }}>
+        Workflow
       </h2>
-      {/* <p className="home__hiw-layer-label">Core TaskMaster Track Submission</p> */}
-      <p className="home__hiw-subheading">Core TaskMaster Track Submission</p>
 
+      {/* Two workflows, two canvases, one shared legend. Separate canvases so
+          each fitView zooms to its own content — sharing one would scale both
+          to the wider diagram and shrink SurgBot's labels for no reason. */}
       <div className="home__pipeline-card">
-        <div>
-          <span className="home__pill">Pipeline</span>
-          <h3 className="home__pipeline-title">Autonomous Workflow</h3>
-          <ul className="home__pipeline-desc-list">
-            <li>Patient pre-op data + Real-time Vitals + Surgical video continuously consumed by Gemini 3.5</li>
-            <li>Autonomously evolving state graph serves as real-time context layer for agents</li>
-            <li>Autonomous delegation across 9 agents</li>
-            <li>Autonomous alerts on dashboard</li>
-            <li>Human in the loop design</li>
-          </ul>
+        <FlowLegend />
+        <div className="home__flow-split">
+          <PipelineFlow />
+          <SurgBotPipelineFlow />
         </div>
-        <PipelineFlow />
       </div>
 
       <div className="home__step-grid">

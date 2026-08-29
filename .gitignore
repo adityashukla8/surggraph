@@ -41,3 +41,9 @@ service-account*.json
 
 # Logs
 *.log
+
+# Working docs stay local. Only the architecture exports are published — the
+# rest are build notes and run logs that would go stale in the repo.
+/docs/*
+!/docs/architecture/
+/initial_11082026.md

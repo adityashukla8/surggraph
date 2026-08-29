@@ -4,8 +4,7 @@ import { Hero } from "./Hero";
 import { ProblemSection } from "./ProblemSection";
 import { SolutionSection } from "./SolutionSection";
 import { HowItWorksSection } from "./HowItWorksSection";
-import { SurgBotSection } from "./SurgBotSection";
-import { CompletePictureSection } from "./CompletePictureSection";
+import { ArchitectureSection } from "./ArchitectureSection";
 import { LivingGraphSection } from "./LivingGraphSection";
 import { AgentsSection } from "./AgentsSection";
 import { TechSection } from "./TechSection";
@@ -20,10 +19,9 @@ export function HomePage() {
       <ProblemSection />
       <SolutionSection />
       <HowItWorksSection />
-      <AgentsSection />
+      <ArchitectureSection />
       <LivingGraphSection />
-      <SurgBotSection />
-      <CompletePictureSection />
+      <AgentsSection />
       <TechSection />
       <DemoCtaSection />
       <Footer />
