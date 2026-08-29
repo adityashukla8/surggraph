@@ -131,7 +131,7 @@ const SURGGRAPH_AGENTS: AgentCard[] = [
     name: "Documentation",
     kind: "Agent",
     model: MEDGEMMA,
-    desc: "Drafts the operative record on MedGemma — a medical-domain model writing the medical text, with no general-model fallback. Screened autonomously by Model Armor the moment it's drafted, before a surgeon ever sees an Approve button.",
+    desc: "Drafts the operative record on MedGemma — a medical-domain model writing the medical text. If MedGemma is unavailable, Gemini 3.5 drafts it instead and the record records which model actually wrote it. Screened autonomously by Model Armor the moment it's drafted, before a surgeon ever sees an Approve button.",
     tags: ["medical-domain model", "Model Armor screened", "HITL-gated"],
   },
   {

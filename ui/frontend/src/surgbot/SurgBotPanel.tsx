@@ -5,6 +5,7 @@ import type { ReviewDocument, ReviewPhase, ToolCallEvent, TranscriptEntry } from
 import { useSurgBotVoice } from "./useSurgBotVoice";
 import { ReviewDocumentPanel } from "./ReviewDocumentPanel";
 import "./surgbot.css";
+import { warmSurgBot } from "./warm";
 
 // SurgBot — the voice-driven cross-case review panel. A docked right-hand
 // column (App.tsx's resizable/collapsible split), not a floating overlay —
@@ -246,6 +247,9 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
       <button
         className="sb__collapsed-strip"
         style={style}
+        // The panel opens from here, so this is the first moment SurgBot is
+        // plausibly about to be used — worth the head start on its container.
+        onPointerEnter={warmSurgBot}
         onClick={onExpand}
         title="Expand SurgBot"
         aria-label="Expand SurgBot"
@@ -467,6 +471,9 @@ export function SurgBotPanel({ style, collapsed, onExpand }: SurgBotPanelProps) 
       <div className={`sb__orb-dock${open ? " sb__orb-dock--compact" : ""}`}>
         <button
           className="sb__orb-btn"
+          // Reaching for the orb is the earliest signal the panel is about to
+          // be used — a free head start on the container if it went cold.
+          onPointerEnter={warmSurgBot}
           onPointerDown={handleOrbPointerDown}
           onPointerUp={handleOrbPointerUp}
           onPointerLeave={handleOrbPointerUp}

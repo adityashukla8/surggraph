@@ -76,3 +76,19 @@ class GlobalGemini(Gemini):
 
 def new_agent_model(model_name: str = GEMINI_MODEL) -> GlobalGemini:
     return GlobalGemini(model=model_name)
+
+
+def new_genai_client() -> GenaiClient:
+    """The same configured client, for the paths that are not ADK agents.
+
+    MedGemma's endpoint is a plain vLLM container, so its fallback cannot go
+    through ADK's LlmAgent machinery — it needs the raw SDK. Sharing the
+    client here keeps the `global` location and the retry policy identical to
+    every agent's, rather than re-deriving them at a second call site.
+    """
+    return GenaiClient(
+        vertexai=True,
+        project=PROJECT_ID,
+        location=GEMINI_LOCATION,
+        http_options=types.HttpOptions(retry_options=_RETRY_OPTIONS),
+    )

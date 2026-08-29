@@ -58,7 +58,7 @@ const CARDS: ProblemCard[] = [
         clinician relies on is routinely two weeks stale.
       </>
     ),
-    benefitHeader: "Wait time cut to minutes, not 15 days",
+    benefitHeader: "Wait time cut from days to minutes",
     pairing: "SurgGraph drafts the note automatically at case close — turning a 15-day wait into minutes.",
     citationLabel: "Laflamme et al., 2005 · PMC1560865",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/",

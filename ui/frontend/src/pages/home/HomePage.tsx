@@ -1,5 +1,6 @@
 import "./home.css";
 import { Nav } from "./Nav";
+import { useWarmSurgBot } from "../../surgbot/warm";
 import { Hero } from "./Hero";
 import { ProblemSection } from "./ProblemSection";
 import { SolutionSection } from "./SolutionSection";
@@ -12,6 +13,10 @@ import { DemoCtaSection } from "./DemoCtaSection";
 import { Footer } from "./Footer";
 
 export function HomePage() {
+  // Starts SurgBot's container while the visitor reads, so the voice panel is
+  // not a cold start when they get to it.
+  useWarmSurgBot();
+
   return (
     <div className="home">
       <Nav />

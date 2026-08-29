@@ -106,7 +106,13 @@ steps:
       - --image=${_REPO}/surggraph-backend:${SHORT_SHA}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      # ~17s cold, and the console's snapshot + SSE both land on it. ~$0.32/day.
+      - --min-instances=1
 
+  # --min-instances=1 is stated here rather than left to revision inheritance:
+  # a cold start on this service is ~46s (measured p50) and it is the first
+  # call the console makes, so a deploy that quietly dropped it would put that
+  # wait back in front of a judge. Costs ~$3.46/day while set.
   - id: deploy-orchestrator
     name: gcr.io/cloud-builders/gcloud
     waitFor: [push-backend]
@@ -118,6 +124,7 @@ steps:
       - --image=${_REPO}/surggraph-backend:${SHORT_SHA}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --min-instances=1
 
   - id: deploy-surgbot
     name: gcr.io/cloud-builders/gcloud

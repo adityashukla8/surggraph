@@ -10,6 +10,7 @@ import { AutonomousActionsPanel } from "./components/tiles/AutonomousActionsPane
 import { setActiveCaseId } from "./api/hitl";
 import { useCaseStateStream } from "./graph/useCaseStateStream";
 import { SurgBotPanel } from "./surgbot/SurgBotPanel";
+import { useWarmSurgBot } from "./surgbot/warm";
 
 const STATE_SERVICE_URL = import.meta.env.VITE_STATE_SERVICE_URL ?? "http://localhost:8080";
 const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://localhost:8090";
@@ -50,6 +51,10 @@ async function openCase(videoId: string): Promise<string> {
 }
 
 function App() {
+  // Re-arms SurgBot's container: a console session can easily outlast the
+  // ~15 minute idle window opened by the home page.
+  useWarmSurgBot();
+
   // null until the user presses play — page load alone is not the trigger.
   // The autonomous pipeline starts on that first play (services/
   // orchestrator_service's POST /cases/open), not on mount, so a case_id

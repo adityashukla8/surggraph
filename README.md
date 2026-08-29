@@ -1,413 +1,462 @@
-# SurgGraph
+<div align="center">
 
-An autonomous multi-agent system that watches a robot-assisted radical prostatectomy (RARP) video in real time, builds a live "Living Graph" of everything it perceives and reasons, detects technique errors, reasons about downstream clinical complications grounded in retrieved literature, proposes corrective actions from a bounded action library, detects when the surgeon's actual behavior diverges from a proposed plan, and — after passing a fail-closed verification gate — writes real external records (a FHIR `Communication` alert and a FHIR `DocumentReference` operative note) to a public HAPI FHIR server. Two human-in-the-loop surfaces let a surgeon acknowledge/dismiss proposals and approve/edit/reject the final documentation before anything is filed.
+# SurgOS: Autonomous, Continuously Improving Surgical Safety System
 
-This document is generated directly from the code as it exists in this repository — no external design docs were used as a source. Every claim below is backed by a specific file.
+**SurgOS watches a robotic surgery in real time, catches technique errors as they happen, reasons about where they lead using live published literature, and writes a real clinical record - then reviews the case with the surgeon by voice/text and carries their feedback to improve next sessions.**
 
----
+[![Gemini 3.5](https://img.shields.io/badge/Gemini_3.5_Flash-Vertex_AI-4285F4?logo=googlegemini&logoColor=white)](https://cloud.google.com/vertex-ai)
+[![MedGemma](https://img.shields.io/badge/MedGemma_4B-Vertex_AI-4285F4?logo=google&logoColor=white)](https://developers.google.com/health-ai-developer-foundations)
+[![MedASR](https://img.shields.io/badge/MedASR-Vertex_AI-4285F4?logo=google&logoColor=white)](https://developers.google.com/health-ai-developer-foundations)
+[![ADK](https://img.shields.io/badge/Google_ADK-Agent_Development_Kit-34A853?logo=google&logoColor=white)](https://google.github.io/adk-docs/)
+[![GEAP](https://img.shields.io/badge/Gemini_Enterprise_Agent_Platform-Agent_Runtime_·_Registry_·_Identity_·_Memory_Bank-1A73E8?logo=googlecloud&logoColor=white)](https://cloud.google.com/vertex-ai)
+[![Cloud Run](https://img.shields.io/badge/Cloud_Run-4_services-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/run)
+[![Firestore](https://img.shields.io/badge/Firestore-Living_State_Graph-FFA000?logo=firebase&logoColor=white)](https://cloud.google.com/firestore)
+[![Model Armor](https://img.shields.io/badge/Model_Armor-fail--closed-EA4335?logo=googlecloud&logoColor=white)](https://cloud.google.com/security-command-center/docs/model-armor-overview)
+[![FHIR](https://img.shields.io/badge/HL7_FHIR-real_external_writes-DA291C)](https://hapi.fhir.org)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-159_passing-brightgreen)](#6-spin-up-instructions)
 
-## 1. What actually happens, end to end
+**Built for:** [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/) · Taskmaster track
 
-A user presses play on the demo video in the browser. That triggers `POST /cases/open` on the orchestrator service, which:
+**Live Demo:** _(demo video - add URL)_
 
-1. Mints a brand-new `case_id` (`case-<12 hex chars>`) — every case is fully isolated, no shared state between concurrent viewers.
-2. Fires a tiny "prime" Gemini call and writes the case's static skeleton (trigger node, synthetic patient twin, and every agent node in the topology) concurrently.
-3. Registers the four event-driven agents on an in-process event bus.
-4. Runs **two concurrent sweeps** over the video: **Perception** (what is happening) and **Error Detection** (what is going wrong), one 5-second window at a time.
+**Live Deployment:** https://surggraph-frontend-518946358970.us-central1.run.app
 
-From there the rest of the pipeline is **event-driven**, not scheduled — each stage wakes only when a specific kind of node lands on the graph:
-
-```
- Perception sweep                    Error Detection sweep
- (entities, relations,               (3 role sub-agents, weighted
-  activity, phase)                    aggregation, escalation)
-        |                                     |
-        |                              error node (severity >= medium)
-        |                                     |
-        |                          Complication Reasoning
-        |                          (formulates literature queries,
-        |                           retrieves papers, reasons about
-        |                           complications with evidence backing)
-        |                                     |
-        |                           complication node
-        |                                     |
-        |                          Corrective Replanning
-        |                          (selects from a bounded action
-        |                           library, or escalates)
-        |                                     |
-        |                        corrective_trajectory node
-        |                                     |
-        +------------------------> Divergence Detection
-                                    (polls: did the same error recur?
-                                     is what perception observes
-                                     consistent with the plan?)
-                                             |
-                                    divergence_alert node
-                                             |
-                                     Alert Routing
-                                    (assembles payload, calls the
-                                     Verification Gate)
-                                             |
-                              +--------------+--------------+
-                              |                             |
-                        gate PASSES                    gate BLOCKS
-                              |                             |
-                   FHIR Communication write        verification_block node
-                   (real HTTP POST + readback        (no external write)
-                    to hapi.fhir.org)
-
- [ meanwhile: a surgeon can acknowledge/dismiss any corrective_trajectory
-   via HITL #1 — acknowledging silences future alerts but keeps monitoring ]
-
- After both sweeps finish and in-flight event handlers drain:
-        Benchmark Agent  ->  grades every error node against real ground truth
-        Documentation Agent  ->  drafts an operative note from the whole graph
-                                   (approval_status: pending)
-
- [ a surgeon approves/edits/rejects via HITL #2 — only on approval does the
-   note pass the Verification Gate and get filed as a FHIR DocumentReference ]
-```
-
-Every one of these steps is a real write to a shared graph (the "Living Graph"), streamed live to the browser over Server-Sent Events. Nothing is a mock — the literature retrieval hits real Europe PMC, the FHIR writes hit a real public FHIR server and are read back to confirm they landed, and the ground truth used for grading is a real SEDMamba annotation file, never seen by any detection agent before scoring.
+</div>
 
 ---
 
-## 2. Architecture
+## Table of Contents
 
-Three long-running processes:
+1. [The Problem](#1-the-problem)
+2. [The Solution: What SurgOS Does](#2-the-solution-what-surgos-does)
+3. [Architecture](#3-architecture)
+4. [How It Works](#4-how-it-works)
+5. [Google Cloud Services](#5-google-cloud-services)
+6. [Spin-Up Instructions](#6-spin-up-instructions)
+7. [Project Structure](#7-project-structure)
+8. [Data Sources](#8-data-sources)
+9. [Disclaimer](#9-disclaimer)
+10. [Attributions](#10-attributions)
 
-| Process | What it is | Entry point |
+---
+
+## 1. The Problem
+
+**Surgical errors compound into complications.**
+
+**Complications impact patient outcomes.** 
+
+**Avg. Surgical documentation falls days behind the case that needed it.**
+
+**And feedback from one case rarely reaches the next.**
+
+Real example: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/), a stitching needle slipped out of view during a robotic prostate operation and was lost inside the patient. Finding it meant stopping to search and X-ray - and [X-rays miss needles under 10 mm about 70% of the time](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/). Leaving one behind is what hospitals call a *never event*: roughly [1 in 10,000 operations](https://pmc.ncbi.nlm.nih.gov/articles/PMC12768046/), at an average cost of [about $166,000](https://www.aorn.org/outpatient-surgery/article/the-high-cost-of-retained-surgical-items) each time.
+
+**The needle was on camera the whole time it went missing.** Nobody was watching that feed, nothing reasoned about where it had gone, the operative note was written weeks later, and none of it reached the next case.
+
+| The problem | Impact |
+|---|---|
+| **26.4% of patients** who have something go wrong during an operation go on to develop a serious complication - against 12% of patients where nothing does. One missed step rarely stays contained. <br>[Gawria et al., 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/) | Longer stays, repeat surgery |
+| **15% of surgery patients** develop at least one complication, and 6% develop more than one. Not an edge case - the baseline risk of operating. <br>[Tevis et al., 2016](https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/) | Never events cost ~$166,000 |
+| **374 hours - over 15 days** is how long the average operating note takes to be written up and signed off. The record everyone else relies on is routinely two weeks stale. <br>[Laflamme et al., 2005](https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/) | Hours of delay, Follow-up care flies blind |
+| **Only 28% of feedback programmes** for clinicians improve care by 10% or more; across 98 trials the typical gain was 4.4 points. What one team learns rarely reaches the next. <br>[Ivers et al., 2014](https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/) | Same mistake, next patient |
+
+>**The operating room generates the richest signals in medicine and most of it is never fully leveraged - in the moment, in the record, and in the loop back to the next case.**
+
+---
+
+## 2. The Solution: What SurgOS Does
+
+| Feature | Impact |
+|---|---|
+| **Watches the surgery** - Gemini 3.5 vision over 5-second windows | Continuously updated case context - each instrument movement, interaction with anatomy, phase - automatically logged. **107 nodes / 144 edges from a 90-second window, with nobody watching.** |
+| **Autonomously detects technique errors** - 3 independent agents (temporal, spatial, procedural) vote; deterministic aggregation decides | Errors surface **in the window instant they occur**, _not in a chart review weeks later_. |
+| **Reasons about downstream complications** - patient-specific, grounded in literature retrieved at call time | Tells the surgeon **where the error is likely to lead for *this* patient at _this_ instant** - their BMI, ASA class, prostate anatomy - backed by the medical literature search, rather than a generic risk score. |
+| **Proposes a corrective plan** - from a bounded, OCHRA-derived action library, never free-form clinical text | Suggests **actionable next step to avoid the complication.** And when the system isn't confident, it says *"Escalate - no confident corrective match"* rather than sending a surgeon down a plan it can't stand behind. |
+| **Watches the trajectory and alerts on divergence** - deterministic graph check first, LLM only if ambiguous | **Silence when the plan is followed.** Alarm fatigue is designed out: the system only speaks when the case actually diverges from the safer path. |
+| **Generates the full operative record in minutes** - drafted by MedGemma 4B, a medical-domain model | **Reduces the avg wait time from 374 hours to ~4 minutes.** The record is accurate because it's assembled from what was *observed*, not recalled two weeks later - and the whole care team gets it while it still matters. |
+| **Writes divergences and documentation to a real FHIR endpoint** | Findings land **where the rest of the care team already looks**. Every write is read back to confirm it arrived. |
+| **Refuses to write what it can't evidence** - a fail-closed gate, deliberately not an LLM | A surgeon can trust an alert because the system is **structurally unable to raise errir without evidence.** Blocked writes stay visible on the graph, so what *didn't* go out is auditable too. |
+| **Screens every input and output** - Model Armor, one template, both directions | A hostile or malformed instruction **never reaches the model**, and nothing unsafe reaches the record - protecting both the patient's data and the integrity of what gets filed under a surgeon's name. |
+| **Keeps a human on every external write** - 3 human-in-the-loop gates | **No autonomous action ever reaches a patient's chart.** The surgeon stays the decision-maker; the system does the work and waits to be told yes. |
+| **Lets surgeons and safety teams review the case by voice** - SurgBot's 6-phase conversational review | Patient-safety review in **minutes, hands-free, without opening a chart** - across one case or all of them. Real cross-case analysis over **103 cases** surfaced "out of view" (174) and "needle handling" (117) as the dominant failure modes. |
+| **Learns from what the surgeon says** - approved feedback routed to the specific agent it belongs to | Feedback given **once** changes every future case automatically. The median clinician-feedback intervention moves quality 4.4 points because it never propagates; here propagation is the only thing an approval does. |
+
+---
+
+## 3. Architecture
+
+[![SurgOS architecture](docs/architecture/surgos-architecture-diagram-4k.png)](docs/architecture/surgos-architecture-diagram-4k.png)
+
+> **[Open the full-resolution diagram →](docs/architecture/surgos-architecture-diagram-4k.png)** · [SVG source](docs/architecture/surgos-architecture-diagram.svg)
+
+Two workflows on two runtimes, sharing one state layer and one governance layer.
+
+- **SurgGraph** runs **12 in-process ADK agents on Cloud Run + Vertex AI.** The sweeps make tight, high-volume calls per window; the in-process event bus invariant breaks the moment a case's agents are split across processes; and the vision agents read frames straight off local disk. Remote hops would cost more than they'd buy.
+- **SurgBot** runs **5 separately deployed reasoning engines on the Gemini Enterprise Agent Platform** - Agent Runtime for the engines, Agent Registry for discovery, Agent Identity (SPIFFE) on the tool-free subagents, and Memory Bank as the substrate of the learning layer. Low call volume, managed sessions, native cross-session memory.
+
+SurgBot being on Agent Runtime is what makes the SurgGraph placement a **measured choice rather than an inability**. Both Cloud Run services are registered in Agent Registry regardless.
+
+### The Living Graph
+
+There is no `CaseState` object passed between agents. **State lives entirely in one shared, typed graph in Firestore**, and every agent reads and writes it through a single mutation API.
+
+- **20 node types, 13 edge kinds** - from `entity` and `phase` through `error`, `complication`, `literature_evidence`, `corrective_trajectory`, `divergence_alert`, `verification_block` and `documentation`.
+- **One Firestore document per case** holds a monotonic `seq`; every write is a real transaction, so concurrent writers serialize instead of racing. One isolated graph per case.
+- **Real-time fan-out** via Firestore `on_snapshot`, scoped to `seq > baseline` captured *before* the listener attaches - closing a real data-loss window between a client's snapshot read and its stream open. The console renders live over SSE with no polling.
+- **Node IDs come from one module** (`state/node_ids.py`), never hand-formatted by an agent - which is what stops edges from silently dangling when two agents disagree on a convention.
+- **Removals are overwrites, not deletes** - a deleted document leaves a listener nothing to reconstruct the event from.
+
+### The deterministic / LLM boundary
+
+**An LLM reasons over evidence. It never does arithmetic, never gates safety, never receives the answer key.**
+
+The verification gate, weighted aggregation, severity scoring, literature rank fusion, alert routing, the first-pass divergence check and the entire perception change-diff layer are plain Python on purpose. **Every safety property in this system comes from a step a model is not allowed to touch.**
+
+Full internals - every agent, every prompt, every write path, file-by-file - are in **[docs/surggraph_internals.md](docs/surggraph_internals.md)**.
+
+---
+
+## 4. How It Works
+
+SurgOS is one system running two workflows, joined by a learning layer.
+
+```mermaid
+flowchart LR
+    VID(["Surgical video<br/>+ patient twin"]) ==> A1
+    A1["<b>① SurgGraph</b><br/>ACTS<br/>12 in-process ADK agents<br/>Cloud Run + Vertex AI"]
+    A2["<b>② SurgBot</b><br/>REVIEWS<br/>root + 4 subagents<br/>GEAP Agent Runtime"]
+    A3["<b>③ Learning Layer</b><br/>TEACHES<br/>routing + Memory Bank"]
+
+    A1 ==> FHIR(["FHIR record + alert<br/>real external EHR"])
+    A1 -.->|completed case| A2
+    VOICE(["Surgeon voice"]) ==> A2
+    A2 ==> DOC(["Approved review"])
+    A2 -.->|on approval ONLY| A3
+    A3 ==>|advisory context<br/>at inference| A1
+```
+
+**① SurgGraph - the autonomous workflow.** Point it at a case and press play. `POST /cases/open` mints an isolated `case_id`, writes the full static agent topology up front, and runs perception and error detection as two concurrent sweeps over 5-second windows. Everything downstream is **event-driven, not scheduled** - each stage wakes only when a specific node type lands on the graph. It ends with a real external clinical write and a drafted operative record sitting in a human approval queue.
+
+**② SurgBot - the conversational feedback workflow.** After the case, a surgeon or patient-safety reviewer talks it through by voice. SurgBot never touches the pipeline - it only *reads* the graph SurgGraph already produced. Six phases: case framing, phase walkthrough, error-and-complication review, proposal/divergence review, synthesis, and cross-session patterns - plus standing cross-case queries at any point.
+
+**③ The learning layer - what closes the circuit.** On approval only, feedback is classified (a standing directive, or a case-grounded observation), screened by Model Armor, written to Firestore as the system of record, and indexed into Memory Bank scoped by target agent. Literature retrieval, complication reasoning, corrective replanning and divergence detection each pull their own slice at inference time. It is **advisory text only** - explicitly marked *"NOT ground truth"*, forbidden from suppressing findings, and structurally unable to touch the verification gate.
+
+### Agent roster
+
+| Component | Layer | What it does |
 |---|---|---|
-| **State service** | FastAPI. The single writer of the Living Graph. Firestore-backed. | `services/state_service/main.py` |
-| **Orchestrator service** | FastAPI. Receives `POST /cases/open`, runs the whole agent pipeline as a background task. Also serves the two HITL endpoints. | `services/orchestrator_service/main.py` |
-| **Frontend** | React + Vite + TypeScript. Renders the video, the live graph (ReactFlow), and four side panels. | `ui/frontend/src/App.tsx` |
+| **Orchestrator** | SurgGraph | Opens the case, writes the entire agent topology before anything runs, subscribes the event-driven agents, drives the two sweeps. A plain async function, not an LLM decision-maker. |
+| **Perception** | SurgGraph | One Gemini 3.5 vision call per 5-second window. Raw output never reaches the graph directly - a deterministic change-diff layer with entity/relation/activity debounce decides what gets promoted, so steady state emits nothing. |
+| **Error Detection - Temporal** | SurgGraph | Motion across the window: hesitation, retries, multi-attempt patterns. |
+| **Error Detection - Spatial** | SurgGraph | Instrument and anatomical positioning at native resolution - what left the field of view. |
+| **Error Detection - Procedural** | SurgGraph | Observed technique vs. expected protocol, against six OCHRA-derived error categories. |
+| **Weighted Aggregation + Severity** | SurgGraph · *deterministic* | Requires ≥2-of-3 role agreement and a composite score above threshold to raise an error, then scores severity. **No model** - consensus arithmetic isn't a thing an LLM should do. |
+| **Complication Reasoning** | SurgGraph | Event-driven off error nodes above a severity threshold. Formulates a literature query from live case context and writes complications linked back to their evidence, with rationale specific to *this* patient. |
+| **Literature Retrieval** | SurgGraph · *tool* | Europe PMC, PubMed E-utilities and Semantic Scholar queried in parallel, merged by reciprocal rank fusion with DOI dedup. Every citation traces to a real query. |
+| **Corrective Replanning** | SurgGraph | Selects from a bounded, pre-authored action library derived from OCHRA's own normal-technique indicators, or escalates when nothing fits. Never invents a novel procedure. |
+| **Proposal Acknowledgment** | SurgGraph · *HITL* | The surgeon acknowledges or dismisses a live proposal. The decision is durable graph state, so it survives a restart. |
+| **Divergence Detection** | SurgGraph | Polls only while a proposal is live. Deterministic graph check first; LLM reasoning only when that's ambiguous. Writes nothing when the plan is followed. |
+| **Alert Routing** | SurgGraph · *deterministic* | Writes the pending action to the graph *before* sending it, calls the gate synchronously, executes only on a pass - so a blocked alert leaves a visible record of what didn't go out. |
+| **Verification Gate** | SurgGraph · *deterministic* | Eleven structural checks over the graph, fail-closed. Read-only **by import**, not by promise: it cannot write the action it approves. |
+| **Documentation** | SurgGraph | Drafts the operative record on **MedGemma 4B**, with no general-model fallback. Screened by Model Armor before a surgeon sees an Approve button. |
+| **Operative Record Approval** | SurgGraph · *HITL* | Approve, edit or reject. An edit is re-screened and re-gated before filing - human input is treated as untrusted, exactly like model output. |
+| **FHIR Write Executors** | SurgGraph · *tool* | Thin adapters. Real `Communication` and `DocumentReference` writes, each read back to confirm. |
+| **SurgBot Orchestrator** | SurgBot | The one agent the surgeon talks to. Nine real tools driving the six-phase review. **The only agent in the system with tools**, because a live conversation's next question can't be pre-sliced. |
+| **Error Chain Reviewer** | SurgBot | Explains the mechanism behind a flagged error and probes whether it holds up clinically. Separately deployed with Agent Identity. |
+| **Synthesis** | SurgBot | Drafts the case review document from what the surgeon actually said. |
+| **Pattern Insight** | SurgBot | Surfaces patterns across a reviewer's prior sessions from Memory Bank. Reports "no history yet" honestly rather than inventing one. |
+| **Feedback Router** | SurgBot | Classifies free-text feedback as a standing directive or a case-grounded observation, and routes it to the pipeline agent it belongs to. |
+| **Review Approval** | SurgBot · *HITL* | Approving the review is what turns captured feedback into durable knowledge. |
+| **MedASR / Chirp 3 HD** | SurgBot · *tool* | Medical-domain speech recognition in, streaming HD synthesis out. Disclosed in the transcript as plain API calls, not dressed up as agents. |
 
-Every agent module is plain Python (`agents/`) built on Google's Agent Development Kit (`google-adk`). Reasoning agents are real `LlmAgent` instances calling Gemini through Vertex AI; a handful of steps (aggregation math, severity scoring, the verification gate, benchmark scoring) are deliberately **not** LLM calls — see §5 for exactly which and why.
+---
 
-### 2.1 The Living Graph — the system's actual state
+## 5. Google Cloud Services
 
-There is no `CaseState` object passed between agents. State lives entirely in a shared, typed graph (`state/schema.py`), and every agent reads/writes it through `tools/state_tools.py`. Two write primitives:
-
-```python
-apply_state_patch(case_id, node=..., edge=..., reason=...)          # one node or edge
-apply_state_patches(case_id, [(node, edge, reason), ...])           # a batch, one transaction
-```
-
-Both POST to the state service (or, with no `STATE_SERVICE_URL` set, fall back to a local `data/runtime/{case_id}_graph_patches.jsonl` file — used by scripts/tests). The batch form was introduced specifically because Firestore's transactional write overhead (~87% of a single write's latency is the transaction itself, not the network) makes N separate writes far more expensive than one batch of N — see `agents/error_detection/agent.py` and `agents/perception/agent.py`, where a whole window's writes are collected and sent as one call.
-
-**19 node types** (`state/schema.py::NodeType`):
-
-| Group | Types |
+| Category | Services |
 |---|---|
-| Structural | `trigger`, `agent`, `patient_twin` |
-| Perception | `entity`, `perception_event`, `snapshot`, `phase`, `vitals`, `manual_event` |
-| Reasoning chain | `error`, `complication`, `literature_evidence`, `corrective_trajectory`, `divergence_alert` |
-| Action & safety | `action_intent`, `verification_block`, `action_outcome` |
-| Post-case | `benchmark`, `documentation` |
-
-**13 edge kinds** (`EdgeKind`): `detection`, `causal_reasoning`, `evidence`, `prediction`, `proposal`, `trajectory_comparison`, `confirmation`, `verification`, `grading`, `hierarchy`, `involved`, `outcome`, `succession`.
-
-Node IDs are never hand-formatted by an agent — every ID comes from one module, `state/node_ids.py`, e.g. `error(window, category) -> "error:{window}:{category}"`, `complication(root_error_id, name) -> "complication:{root_error_id}:{slug}"`. This is what keeps edges from silently dangling when two agents disagree on a convention. Edge IDs are deterministic from `(source, target, kind)`, so re-writing the same logical edge updates it in place rather than duplicating it.
-
-**Why the graph, not a shared object:** every reasoning call gets a *slice* of the graph assembled fresh by plain Python (`tools/context_slice.py`) before dispatch — never a raw tool call the model has to make itself. This keeps context assembly deterministic (same graph in, same slice out) and keeps agents from having to reason about how to query state.
-
-### 2.2 How a write becomes visible: Firestore, the event bus, and SSE
-
-`services/state_service/store.py` (`CaseGraphStore`) is a genuinely multi-tenant, multi-instance-safe backing store:
-
-- One Firestore document per case (`cases/{case_id}`) holds a monotonic `seq` counter.
-- One subcollection per case (`cases/{case_id}/graph_items/{item_id}`) holds every node and edge, discriminated by a `kind` field. `item_id` is `node:{node_id}` or `edge:{edge_id}`.
-- Every write (single or batched) is a real Firestore transaction that reads the case's current `seq`, increments it, and writes the item(s) with their assigned `seq` — so concurrent writers to the same case serialize correctly instead of racing.
-- `remove_edge` is never a physical delete (a deleted doc has no data left for a listener to reconstruct an event from) — it's a `.set()` overwrite carrying `op="remove_edge"`, filtered out by `snapshot()`.
-- Real-time fan-out uses Firestore's native `on_snapshot` listener, scoped to `where(seq > baseline_seq)` with the baseline captured *before* attaching — closing a real, previously-observed data-loss window where a client's `GET /snapshot` and its SSE `GET /stream` attach were two separate moments, and anything written in between was lost. The frontend passes the snapshot's own `seq` as `?since_seq=` when it opens the stream (`ui/frontend/src/graph/useCaseStateStream.ts`).
-
-Inside the orchestrator process, `state/event_bus.py` is a **separate**, in-process pub/sub layer — not Firestore listeners. Event-driven agents (Complication Reasoning, Corrective Replanning, Divergence Detection, Alert Routing) subscribe to it, filtered by node type:
-
-```python
-bus.subscribe("complication_reasoning", handler, node_types={"error"})
-```
-
-`apply_state_patch`/`apply_state_patches` call `event_bus.publish(case_id, event)` immediately after each write commits — so a handler triggered by a write always sees a graph that already contains what triggered it. This only works because one case's agents all run inside the one background task that opened it (`agents/orchestrator/agent.py::open_case`); the module docstring is explicit that this invariant would break if a case's agents were ever split across processes.
-
-At case close, `event_bus.close_bus` drains every in-flight handler (bounded by a timeout derived from Divergence Detection's own poll budget) before the post-case agents run, so a complication-reasoning pass triggered by the very last error doesn't get cancelled mid-flight.
+| **AI models** | **Gemini 3.5 Flash** (Vertex AI, `global` endpoint) · **MedGemma 4B** (self-deployed Vertex AI endpoint) · **MedASR** (self-deployed Conformer ASR) · **Chirp 3 HD** (Cloud Text-to-Speech) |
+| **Agent platform** | **Vertex AI** · **Gemini Enterprise Agent Platform** - Agent Runtime (5 engines) · Agent Registry (6 services) · Agent Identity (SPIFFE) · Memory Bank · **Model Armor** |
+| **Infrastructure** | **Cloud Run** (4 services) · **Cloud Build** (CI/CD on push to main) · **Firestore** (Living Graph) · **Cloud Storage** · **Artifact Registry** |
+| **Observability** | **Cloud Trace** (OpenTelemetry GenAI spans) · **Cloud Logging** · **Cloud Monitoring** |
 
 ---
 
-## 3. The agent roster
+## 6. Spin-Up Instructions
 
-### 3.1 Orchestrator (`agents/orchestrator/agent.py`)
+### Prerequisites
 
-Not an LLM-driven decision maker — a plain async function, `open_case(case_id, video_id, start_s, end_s)`, wrapped in a thin `OrchestratorAgent(BaseAgent)` for ADK Registry visibility. Its real job:
+- **Python 3.12** (`>=3.12,<3.13`) and [`uv`](https://docs.astral.sh/uv/)
+- **Node.js 20+** and npm
+- A **Google Cloud project** with billing enabled
+- `gcloud` CLI, authenticated: `gcloud auth login && gcloud auth application-default login`
 
-1. Resolve the sweep range: explicit args win, else `SURGGRAPH_SWEEP_START_S`/`SURGGRAPH_SWEEP_END_S` env vars (development bound), else the video's real full duration (read via `cv2`, never assumed).
-2. Concurrently: (a) draw the entire static skeleton — trigger node, patient twin, every top-level agent node, Error Detection's aggregation node and 3 sub-agent nodes, all hierarchy edges — as one batched write, and (b) fire the prime Gemini call.
-3. Subscribe the four event-driven agents to the case's event bus.
-4. Concurrently run `error_detection_case(...)` and `perception_case(...)` to completion.
-5. Drain the event bus (budget = Divergence Detection's `MAX_POLLS * POLL_INTERVAL_S + 30`).
-6. Run `benchmark_case(...)` then `draft_note(...)`, each independently try/excepted so one failing never blocks the other or fails case close.
-
-The **prime call** (`_prime_gemini`) is a throwaway `LlmAgent` built once at import, using the exact same model/location config every real agent uses, fired through the same `run_llm_agent_once` path — the intent is to pay any one-time cold-start cost on Vertex AI's serving path before the two big sweeps make their first real calls. It is best-effort: a failure is logged and the sweeps proceed regardless.
-
-**Dispatched agents** (`_TOP_LEVEL_AGENTS`): `error_detection_coordinator`, `perception`, `complication_reasoning`, `literature_retrieval`, `corrective_replanning`, `divergence_detection`, `alert_routing`, `verification_gate` — drawn in the static skeleton up front (event-driven ones get a node before they've ever fired, so their eventual output has somewhere to attach).
-
-### 3.2 Perception Sweep Agent (`agents/perception/`)
-
-**Trigger:** dispatched at case open, runs continuously over `[start_s, end_s)` in strictly sequential, non-overlapping 5-second windows (`DEFAULT_WINDOW_S`, env `SURGGRAPH_WINDOW_S`). Sequential is deliberate — window N's entity-registry diff depends on window N-1's accumulated state.
-
-**Model call, one per window:** `agents/perception/subagent.py` builds a single `LlmAgent` (`new_agent_model()` — no role split, unlike Error Detection). Real system instruction (verbatim, `_INSTRUCTION`):
-
-> "You are the Perception Agent, observing one short window of a robot-assisted radical prostatectomy (RARP) surgical video. Report what you can actually see in THIS window: every surgical instrument, anatomical structure, and material... the real relations between them... the current surgical activity, in your own words. STABLE IDS MATTER MORE THAN ANYTHING ELSE HERE... If you see the same real-world object again, REUSE ITS EXISTING ID EXACTLY..."
-
-**Input, per window:** 5 locally-extracted JPEG stills (native resolution, `tools/video_utils.py::sample_frames`), plus a text preamble built by `agents/perception/agent.py::_perceive_window` containing: the window's time range, the list of entity IDs already active in this case (so the model can reuse them verbatim — pulled from `tools/context_slice.py::perception()`), the previous window's activity label, and an *opaque* numeric phase/action ID from the real SAR-RARP50 annotation file (`tools/action_labels.py`) as a hint only — never a name, never told back to the model.
-
-**Structured output** (`PerceptionWindowOutput`): `entities: list[PerceivedEntity]` (stable_id, kind, label, confidence), `relations: list[PerceivedRelation]` (subject_id, verb, target_id, confidence), `activity_description: str`, `reasoning: str`.
-
-**What happens to the raw output — this is the load-bearing part:** the raw model output is *never* written to the graph directly. It passes through a **deterministic, pure Python** change-diff layer (`agents/perception/pipeline.py::PerceptionPipeline`) that decides what actually gets promoted to a graph event:
-
-- **Entity debounce:** an entity must be absent 3 consecutive windows before it's marked "disappeared" (tolerates single-window occlusion); 2 consecutive windows present before a disappeared entity is marked "reappeared". Confidence is tracked as an EMA (`α=0.3`).
-- **Relation debounce:** a relation starts once seen in 2 of the last 3 windows; ends after 3 consecutive absent windows.
-- **Activity change debounce:** activity descriptions are normalized (lowercased, verb-canonicalized, stopwords stripped, tokens sorted — so "dissecting the bladder neck" and "bladder neck dissection" collapse to the same string) and a *departure* from the current activity must persist 2 consecutive windows before it's adopted — plus a 15-second minimum interval between activity-change events.
-- **Rate ceilings:** at most 5 entity events per window (excess batched into one `state_summary`); more than 3 relation events on one entity within 5 seconds coalesce into one `relation_burst`.
-- **Heartbeat:** if 60 seconds pass with zero emitted events, one lightweight "steady" event proves liveness.
-
-Steady state emits **nothing** — this is deliberate, so downstream event-driven agents never fire on noise and the graph stays readable over a full case. The full raw output of every window (including suppressed windows) is separately written to a Firestore audit subcollection (`services/state_service/store.py::write_perception_audit`) — never rendered, never read by any live decision, purely for post-hoc analysis.
-
-**What reaches the graph, batched into one write per window** (`agents/perception/agent.py::_emit`): updated `entity` nodes, new `perception_event` nodes for whatever the diff promoted, the `snapshot:current_activity`/`snapshot:current_phase`/`snapshot:active_entity_set` slots updated in place, a new `phase` node on a real phase change (labeled with the model's own semantic activity text, never a bare ID), a `succession` edge chaining each new phase to the previous one (the graph's chronological spine), and every event linked via a `hierarchy` edge to the phase it happened during.
-
-**Synthetic vitals** (`tools/vitals_stream.py`) ride the same per-window batch. A deterministic function of `(video_time_s, case_duration_s)` — same second always yields the same sample (a fixed-seed hash of the timestamp provides noise, so nothing is truly random). Modeled on real RARP physiology: pneumoperitoneum + steep Trendelenburg raises peak airway pressure and EtCO₂, raises MAP modestly, and two scripted excursions (a hypotensive episode ~42-52% through the case, a CO₂-retention episode ~68-78% through) exist specifically to exercise the complication-reasoning path. A `vitals` node is written only when a channel deviates from the *expected* trajectory for that point in the case (not the raw baseline — insufflation itself isn't a deviation) by more than a fixed per-channel threshold.
-
-### 3.3 Error Detection (`agents/error_detection/`)
-
-**Trigger:** dispatched at case open, runs concurrently with Perception over the same range, in non-overlapping 5-second windows.
-
-This is the most structurally complex agent — modeled on CARES (a published zero-shot multi-agent surgical-error-detection architecture), with three independent role perspectives and a deterministic weighted-consensus step.
-
-**Per window, real call sequence:**
-
-1. **Screen pass — 3 concurrent calls, one per role** (`temporal`, `spatial`, `procedural`; `agents/error_detection/subagents.py::build_subagent(mode="screen")`). Each role gets its own frame sample (`STILL_FRAME_PROFILE`: temporal 5 frames @ 960×540, spatial 4 frames native res, procedural 3 frames native res) and a shared instruction pattern:
-
-   > "You are the TEMPORAL analysis agent. Focus on timing, motion, and sequence... For EACH of the six error categories below, decide whether you suspect that category of error is present in this window, based only on what you can actually observe..." followed by the full 6-category OCHRA knowledge block (see below).
-
-   Output (`ScreenOutput`): a list of `CategoryOpinion` (category, suspected, confidence, observation) — one per category the role formed a real opinion on; a category can be omitted entirely rather than guessed.
-
-2. **Escalation — deterministic, no model call** (`agents/error_detection/aggregation.py::pick_escalation_candidate`): across all 3 roles' opinions, picks the single category with the highest confidence, if any cleared `ESCALATION_CONFIDENCE_BAR = 0.4`. Otherwise no escalation happens this window.
-
-3. **Deep pass — 3 concurrent calls, only if something escalated** (`mode="deep"`), same 3 roles, same frames, but framed as a focused re-examination of the *one* escalated category at a fixed `"attending"` expertise tier:
-
-   > "A screening pass flagged this window as a candidate for the '{category}' error category. Now give it a focused, deeper look... Apply balanced clinical judgment: weigh the indicators below against the surgical context you can infer from the frames..."
-
-   Output (`DeepOutput`): `error_present: bool`, `confidence: float`, `reasoning: str`.
-
-4. **Aggregation per category — deterministic, no model call** (`agents/error_detection/aggregation.py::aggregate`): `composite = 1.2·O_temporal + 1.0·O_spatial + 0.8·O_procedural`, fires if `composite > 1.7`. Weights and threshold are project-authored (CARES doesn't publish tuned values), chosen so no single role's dissent can fire an error alone but any two agreeing roles can. For the escalated category, `O_*` comes from the real deep-tier verdict; for every *other* category, `O_*` falls back to that role's own screen-pass `suspected` boolean — an explicit, disclosed design (`CategoryResult.reviewed: "deep" | "screen"` distinguishes the two).
-
-**The 6 error categories and their knowledge scaffold** (`agents/error_detection/knowledge.py::ERROR_KNOWLEDGE_LIBRARY`) — CARES' own published taxonomy, each with a hand-authored `definition`, `normal_indicators`, `error_indicators`, `focus_areas`, real SEDMamba fine-type codes it subsumes, and project-authored `tis`/`cis` (Technical Intricacy / Clinical Impact Score, 1–3): `multiple_attempts`, `out_of_view`, `needle_handling`, `tissue_handling`, `suture_handling`, `instrument_control`.
-
-**What reaches the graph, one batched write per window** (`agents/error_detection/agent.py`): the 3 sub-agent role nodes' cumulative time ranges widened, one `detection` edge per role into the aggregation node carrying that role's real reasoning text (whether or not the window fired), and — for every category that actually fired — an `error` node (labeled with severity, category, confidence, composite score, video time, reasoning) plus a `detection` edge from the aggregation node.
-
-**Severity** (`agents/error_detection/severity.py`) is computed separately from confidence — `0.65·clinical_impact(category) + 0.35·detection_strength(composite, threshold)`, banded into low/medium/high. This is what Complication Reasoning actually triggers on (`meets_complication_trigger`, threshold = `"medium"`), not raw confidence — a detector can be very confident about a trivial error and unsure about a dangerous one.
-
-### 3.4 Complication Reasoning (`agents/complication_reasoning/`)
-
-**Trigger:** event-driven, subscribes to `error` nodes at or above severity `"medium"`. Deduplicated per `(case_id, error_category, current_phase, patient_profile_id)` — the same category reasoned about twice in one phase is a repeat question.
-
-**Two real Gemini calls per error**, both text-only:
-
-1. **Query formulation** (`build_query_agent`) — reads the error, patient twin, vitals trend, current activity, and recent related errors, and composes 3–5 short independent search queries. The instruction is unusually detailed because Europe PMC is a **boolean AND** engine, not semantic search — every extra word deletes candidates rather than refining them (measured: a 4-word query returned 608 hits, the same idea at 10 words returned 1). Output (`LiteratureQuery`): `queries: list[str]` (2–5), `rationale`, `initial_concerns`.
-
-2. **Reasoning** (`build_reasoning_agent`) — reads the same context plus the retrieved abstracts (numbered) and names 0–3 complications worth surfacing. Each candidate (`ComplicationCandidate`) carries `name`, `mechanism` (one sentence), `patient_specific_factor`, `confidence`, `supporting_citation_index` (or `None`), and `evidence_backed: bool` — **true only if a real retrieved abstract supports it**; the model is explicitly instructed never to stretch a loosely-related paper into a citation.
-
-**Retrieval, between the two calls** (`agents/literature_retrieval/agent.py::retrieve`): every query fans out concurrently to a real Europe PMC REST call (`tools/europepmc_rag.py`, `live=True`), per-case per-query cached by SHA-256 hash. Results merge via **Reciprocal Rank Fusion** (Cormack, Clarke & Buettcher, SIGIR 2009, `k=60`) — no relevance score exists on a live Europe PMC search, so RRF's rank-position-only merge is the correct tool; a paper surfacing under more than one independently-phrased query outranks one that only topped a single list. Each retrieved paper becomes a `literature_evidence` node, hung off whatever prompted the search (the error node) via a `hierarchy` edge — "consulted," not "supports."
-
-**What reaches the graph:** one `complication` node per candidate, a `causal_reasoning` edge from the root error, and — only for the specific paper the model actually cited — an `evidence` edge from that `literature_evidence` node. The triggering error node is updated with a `complication_status` (`"reasoned"`, `"none_warranted"`, `"already_reasoned"`, or `"below_severity_threshold"`) so the graph never shows an unexplained absence.
-
-### 3.5 Corrective Replanning (`agents/corrective_replanning/`)
-
-**Trigger:** event-driven off `complication` nodes.
-
-**One real Gemini call.** The critical design constraint: **the model selects, it never generates.** `CorrectiveProposal`'s schema has no field for free-text clinical instructions — only `action_id: str` (validated against a library afterward), `order: int`, `why_this_action: str`. The instruction:
-
-> "YOU MAY ONLY SELECT FROM THE LIBRARY. Return the action_id of each action you are choosing... You cannot write an action of your own — there is nowhere in the output to put one... If nothing in the library genuinely fits this situation, set escalate=true... A forced weak match is worse than an honest escalation."
-
-**Enforcement, not trust:** even though the prompt asks the model to stay inside the vocabulary, `agents/corrective_replanning/library.py::resolve` drops any `action_id` that isn't genuinely in that category's library before it can reach the graph — a hallucinated ID cannot get through regardless of what the model outputs.
-
-**The library itself** (`data/corrective_actions/library.json`) is real, reviewable JSON data, not code — one of the few places clinical *content* (not reasoning) is legitimately hand-authored, with its own `_provenance` block disclosing it as "tier 2: derived from published OCHRA error descriptions, not a clinical guideline, not reviewed by a practising surgeon." 6 categories, 2–3 actions each, each action carrying `action`, `rationale`, `verification_check` (what Divergence Detection later measures against), `inverts_indicator`.
-
-**What reaches the graph:** either a `corrective_trajectory` node (dotted-outline in the UI, marking it as a proposal rather than a fact) with its resolved steps and the library's provenance carried onto the node, or — on escalation / zero resolved actions — an escalation node with no steps. Both get `proposal` edges from the complication and the root error.
-
-### 3.6 Trajectory Divergence Detection (`agents/divergence_detection/`)
-
-**Trigger:** event-driven off `corrective_trajectory` nodes (skips escalations — nothing to diverge from). Once active, polls the proposal every `POLL_INTERVAL_S = 5.0` seconds, up to `MAX_POLLS = 8` times (40s max per proposal), stopping early once resolved.
-
-**Deterministic-first, LLM second** — two genuinely different questions:
-
-1. **Deterministic pass, every poll, free:** did the same error category the proposal addresses fire *again* after the proposal was made? If so, that's the strongest available evidence a corrective didn't take effect — written as an alert immediately, `detection_method: "deterministic"`, confidence 0.9, no model call.
-
-2. **Semantic pass, only if there's enough new evidence** (`MIN_OBSERVATIONS_TO_JUDGE = 2` new `perception_event`s since the proposal): one real Gemini call (`agents/divergence_detection/subagent.py`) comparing the proposal's steps and their verification checks against what perception has actually observed since. Output (`DivergenceJudgment`): `aligned: bool | None` (a real third state — "cannot tell" is a legitimate, non-guessing answer), `confidence`, `satisfied_steps`/`unsatisfied_steps` by order, `reasoning`.
-
-> "aligned=null if the observations genuinely do not let you tell... A false divergence alert interrupts a surgeon mid-operation, so silence is much better than a guess."
-
-**Deduplication, two layers:** one alert per proposal, and — because one error can spawn several complications, each with its own proposal, each independently noticing the same recurrence — one alert per underlying *evidence*, across proposals, so a surgeon hears "you were asked to fix X and it happened again" once, not five times.
-
-**Advisory mode (HITL #1 interaction):** if the proposal was acknowledged by a surgeon, divergence detection keeps polling but marks any alert `advisory: True`, which Alert Routing refuses to route externally — acknowledgment silences the alert path, it does not stop monitoring.
-
-**What reaches the graph:** a `divergence_alert` node, a `trajectory_comparison` edge from the proposal, and a `detection` edge from every real observation node that evidenced it.
-
-### 3.7 Alert Routing (`agents/alert_routing/`)
-
-**Trigger:** event-driven off `divergence_alert` nodes. **No model call** — every field in the alert payload is already on the graph, written by the agent that reasoned it; re-generating it here would let a second model paraphrase a clinical claim its author never made.
-
-Mechanically assembles the full reasoning trail (root error, complication with its literature citations, proposal steps, divergence reasoning, provenance tier) into a payload, writes an `action_intent` node **before** anything leaves the system (`status: "awaiting_verification"`), then calls the Verification Gate *synchronously*. Only on a pass does it call `tools/fhir_alert.py::send_alert`. Either way, a real `action_outcome` node records what actually happened — delivered, blocked, or failed — so an intent is never left ambiguous.
-
-### 3.8 Verification Gate (`agents/verification_gate/gate.py`)
-
-**No model call, ever** — every check is a structural fact about the graph (does this node exist, is this attribute true, is this number above this floor). Deliberately **fail-closed**: a missing node, absent attribute, or exception mid-walk blocks, never passes. Structurally **read-only**: this module imports no write tool, no alerting tool, no FHIR tool — it returns a verdict; the caller performs the write.
-
-**`evaluate_divergence_alert`** walks divergence → proposal → complication → root error, checking at each step: the node resolves, the proposal isn't an escalation, it has real provenance and steps, **the complication is `evidence_backed`** (the check this gate fundamentally exists for — an ungrounded complication can never become an external alert, regardless of confidence), complication confidence ≥ 0.5, the causal/proposal edges genuinely exist on the graph (not just asserted in attrs), divergence confidence ≥ 0.6, and the alert isn't advisory.
-
-**`evaluate_documentation`** is a different check set for a different artifact: the draft exists and has a summary, ≥4 sections are populated, **`approval_status == "approved"`** (the entire point of HITL #2 — an unapproved note can never reach the clinical record), a benchmark exists for the case (so a reader can weight what they're reading), and limitations are stated.
-
-Every evaluation, pass or block, is written as a `verification_block` node with the full per-check breakdown — passes are recorded too, so an approved external write always shows it was actually checked.
-
-### 3.9 HITL #1 — Acknowledgment (`agents/hitl/acknowledgment.py`)
-
-`POST /cases/{case_id}/hitl/acknowledgment` on the orchestrator service. Applies `"acknowledged"` or `"dismissed"` to a `corrective_trajectory` node in place, and writes a separate `manual_event` node (`source_agent: "human"`) edged to the proposal — the human action is recorded as a human action, never silently folded into the proposal's own attrs as if the system had decided on its own. Acknowledged proposals stay monitored (in advisory mode); dismissed ones stop being monitored entirely.
-
-### 3.10 Benchmark Agent (`agents/benchmark/agent.py`)
-
-**No model call** — deterministic arithmetic over graph state and real ground truth, so scoring can't vary between runs of the same case. Regenerates the exact window grid the live sweep used, checks which windows the case actually fired an `error` node on (from `error:{window_id}:{category}` IDs), and scores against SEDMamba's real per-window ground truth (`data/annotations/{video}/error_annotation.pkl`).
-
-**Scored on the binary error/no-error axis only** — the real ground truth (`error_GT`) is a binary array with no category labels, so per-category precision/recall is not computable from this data and is explicitly not claimed. Reports macro-F1 against CARES' own published 0.543 on this exact dataset as the honest comparison bar, plus descriptive-only (never scored) per-category fire counts. Writes one `benchmark` node with a `grading` edge from every error node it graded. **This is the one legitimate place ground truth enters the system, and only post-hoc** — no live detection code imports the annotation loader.
-
-### 3.11 Documentation Agent (`agents/documentation/`)
-
-**Trigger:** runs once at case close, after Benchmark (so the draft can report how much to trust itself).
-
-**One real Gemini call** over the *entire* case graph — unlike every other agent's filtered slice, documentation deliberately doesn't filter, because the whole point is that the graph already contains the record. The instruction's central rule, repeated because it's the one thing that must never slip:
-
-> "Every clinical statement must be attributable to what actually produced it. WRITE 'Automated analysis flagged possible out-of-view instrument handling at 0:20.' NEVER 'The instrument was handled out of view at 0:20.'"
-
-Output sections (`OperativeNoteDraft`): `procedure_course` (the observed phase progression — genuinely directly observed, stated plainly), `technique_observations` (flagged errors, framed as unconfirmed automated findings), `risks_considered` (complications, each marked literature-grounded or not), `decision_support` (what was proposed and how the surgeon responded — the one section with no analog in a conventional operative note), `physiological_events`, `system_performance` (the benchmark, in plain language — "if precision was poor, that is the most important sentence in the document"), `summary`, `limitations`. Deliberately **no "Complications" heading** — that word means something occurred; these are hypotheses about what could follow a detection that may itself be a false positive.
-
-Written with `approval_status: "pending"` — nothing is filed until HITL #2 approves it.
-
-### 3.12 HITL #2 — Documentation Approval (`agents/hitl/approval.py`)
-
-`POST /cases/{case_id}/hitl/approval`. No parked coroutine anywhere — the docstring is explicit that a background task held open for an approval that might come hours later can't survive a restart or scale-to-zero, so the draft's own `approval_status: pending` on the graph *is* the durable state, and this endpoint does the entire remaining flow synchronously when the surgeon actually acts: apply the decision → gate → real FHIR `DocumentReference` write (`tools/fhir_write.py`, with readback verification) → outcome node. An edit is treated as an approval of the edited text, with the original preserved alongside so the record shows system output vs. clinician sign-off.
-
----
-
-## 4. External integrations
-
-**FHIR** (`tools/fhir_write.py`, `tools/fhir_alert.py`) — a real public HAPI FHIR R4 server (`hapi.fhir.org/baseR4` by default, `FHIR_BASE_URL` env override). Every write is followed by a real HTTP `GET` readback that field-compares the response against what was sent, and `verified: bool` is reported honestly rather than assumed from a 200/201. Both writers are idempotent: `write_document_reference` stamps an idempotency key into the resource's `identifier` array and checks for a prior write (process-local cache first, then a real search) before creating a duplicate; `send_alert`'s FHIR `Communication` carries an identifier keyed on `(case_id, alert_node_id)` for the same reason. Alerts use FHIR's `Communication` resource (the real HL7 model for "a record of a communication such as an alert") rather than a generic webhook — a deliberate choice for genuine clinical-system integration over plumbing.
-
-**Europe PMC** (`tools/europepmc_rag.py`) — `search_literature(query, k, live)`. `live=True` (what Complication Reasoning always uses) hits the real Europe PMC REST API directly. A cached-corpus path also exists (FAISS `IndexFlatIP`, `all-MiniLM-L6-v2` sentence-transformer embeddings, `data/rag_cache/corpus.jsonl` — 50 pre-fetched open-access abstracts) for a "no live network" fallback mode, but the live agent path always queries live. This module does zero query formulation of its own — the caller (an LLM) composes the query from live case context; no error category is ever mapped to a search term in code.
-
----
-
-## 5. Synthetic data — disclosed everywhere it surfaces
-
-**Patient twin** (`tools/patient_twin.py`, `data/synthetic/patient_twin.json`) — one authored profile (`display_name: "Synthetic RARP Patient 001"`), loaded once per case and written into the static skeleton. Carries `_disclosure` and `_provenance` fields, and every graph node/prompt rendering of it leads with "SYNTHETIC." D'Amico risk group is *derived* from PSA/Gleason/stage (D'Amico et al., JAMA 1998 criteria), never stored, so it can't drift from the three values that define it. `elevated_priors` (6 declared fields — e.g. prostate volume, median lobe, prior TURP, membranous urethra length, BMI, ASA class) drive both the risk-profile summary text and the UI's prior-marker dots from one shared source.
-
-**Vitals** (`tools/vitals_stream.py`) — deterministic function of the case clock, described fully in §3.2. Every sample and node carries `synthetic: True`.
-
-**The corrective-action library** (`data/corrective_actions/library.json`) — real reviewable data, explicitly tier-2 sourced (derived from the OCHRA-grounded error-knowledge library, not a clinical guideline, not surgeon-reviewed), never guideline text ingested directly.
-
----
-
-## 6. Frontend (`ui/frontend/src/`)
-
-React 19 + Vite + TypeScript, `@xyflow/react` (ReactFlow) for the graph canvas, `@dagrejs/dagre` for auto-layout.
-
-**Trigger flow:** the video's *first* real `onPlay` event (not page load) calls `POST {ORCHESTRATOR_URL}/cases/open`; the returned `case_id` opens an SSE connection to the state service (`ui/frontend/src/graph/useCaseStateStream.ts`), which applies every `StateDiffEvent` to local node/edge maps keyed by ID with per-item `seq`-based last-write-wins (Firestore's listener delivers changes in whatever order it batches them, not necessarily ascending `seq` — so a global "must be exactly last+1" policy would cause spurious resyncs; per-key seq comparison is what actually matches Firestore's real delivery semantics).
-
-**Panels** (`components/tiles/`):
-
-| Panel | Shows |
-|---|---|
-| `VideoPanel` | The raw source video. |
-| `StateGraphPanel` | The live graph — every node the outline-color-by-kind / icon-color-by-agent axes from `graph/palette.ts`, click-to-collapse/expand any node with children (`graph/useGraphCollapse.ts` — reachability-based, so a node reachable through more than one path stays visible when only one parent collapses), a legend reading from the same label map the nodes tag themselves with. |
-| `EventInputPanel` | Manual free-text event injection (`POST /events/manual`, tagged `source_agent: "human"`, never disguised as an inference) plus a live feed of Error Detection's own per-window reasoning, tagged by real `source_agent` (temporal/spatial/procedural/aggregation) with wall-clock and video time. |
-| `CaseContextPanel` | The synthetic patient twin (collapsed-by-default detail groups) and live vitals with sparklines, sourced entirely from the graph — no client-side clinical computation. |
-| `AutonomousActionsPanel` | A unified timeline of corrective proposals, divergence alerts, the documentation draft, and the benchmark scorecard — each with its own reasoning-trail drill-down, citation list (from real `evidence` edges, not attrs), and — for proposals and the documentation draft — the actual HITL controls that call the orchestrator's approval/acknowledgment endpoints. |
-
-Graph rendering carries every node's kind as visible text (not color alone, so it survives greyscale/colorblind viewing), auto-sized by real canvas text measurement (`graph/measureLabel.ts`) so dagre reserves exactly the space a node will actually render at.
-
----
-
-## 7. Repository layout
-
-```
-agents/                  one directory per agent; empty scaffolds for
-                          never-built agents have been removed
-  orchestrator/           root dispatcher, case lifecycle
-  perception/             sweep agent + deterministic change-diff pipeline
-  error_detection/        coordinator, 3-role sub-agents, OCHRA knowledge,
-                          aggregation math, severity scoring
-  complication_reasoning/ event-driven, 2-call chain
-  literature_retrieval/   Europe PMC retrieval + RRF merge
-  corrective_replanning/  event-driven, library-constrained selection
-  divergence_detection/   deterministic-first + LLM-fallback polling
-  alert_routing/          payload assembly + gate call, no LLM
-  verification_gate/      fail-closed structural checks, no LLM
-  hitl/                   acknowledgment.py, approval.py
-  benchmark/              deterministic scoring vs. ground truth
-  documentation/          case-close narrative drafting
-  anticipation/           built, NOT dispatched by the orchestrator (see below)
-  scene_graph_builder/    built, NOT dispatched by the orchestrator (see below)
-
-state/                  schema.py (the Living Graph vocabulary), node_ids.py,
-                        event_bus.py (in-process pub/sub)
-services/
-  state_service/          Firestore-backed graph store + SSE (main.py, store.py)
-  orchestrator_service/   case-open trigger + HITL endpoints
-tools/                  everything agents call: state_tools, context_slice,
-                        adk_runner (the shared Gemini invocation path),
-                        gemini_model (model/location config), video_utils,
-                        fhir_write, fhir_alert, europepmc_rag, patient_twin,
-                        vitals_stream, action_labels, sedmamba_labels,
-                        phase_transition_priors, segmentation_masks
-data/
-  synthetic/patient_twin.json
-  corrective_actions/library.json
-  rag_cache/               pre-embedded literature corpus (fallback path)
-  annotations/video_01/    real SAR-RARP50 phase + SEDMamba error ground truth
-  video/                   the source video file(s)
-  validation/              accuracy sweep logs
-ui/frontend/            React/Vite app
-scripts/                validation sweeps, corpus pre-caching, one-off tooling
-tests/                  pytest suite
-```
-
-**`agents/anticipation/`** and **`agents/scene_graph_builder/`** are real, complete, built modules — the first predicts the next surgical phase from live frames (deliberately never shown or asked for a numeric phase ID, per its own docstring), the second extracts scene entities/relations independently of Error Detection. Neither is imported or dispatched by `agents/orchestrator/agent.py` — confirmed by direct inspection of the orchestrator's import list and `_TOP_LEVEL_AGENTS`. They exist in the codebase but are not part of the live pipeline described above.
-
----
-
-## 8. Running it
-
-Three processes, three ports:
+### Step 1 - Clone and install
 
 ```bash
-uv run uvicorn services.state_service.main:app --host 127.0.0.1 --port 8080
-uv run uvicorn services.orchestrator_service.main:app --host 127.0.0.1 --port 8090
-cd ui/frontend && npx vite --host 127.0.0.1 --port 5173
+git clone https://github.com/adityashukla8/surggraph.git
+cd surggraph
+
+uv sync                              # Python dependencies
+cd ui/frontend && npm ci && cd ../..  # frontend dependencies
 ```
 
-Key environment variables (all read via `python-dotenv` / `os.environ`):
+### Step 2 - Enable Google Cloud APIs
+
+```bash
+export PROJECT_ID=your-project-id
+gcloud config set project $PROJECT_ID
+
+gcloud services enable \
+  aiplatform.googleapis.com \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  firestore.googleapis.com \
+  storage.googleapis.com \
+  modelarmor.googleapis.com \
+  speech.googleapis.com \
+  texttospeech.googleapis.com \
+  cloudtrace.googleapis.com
+```
+
+### Step 3 - Create the backing resources
+
+```bash
+# Firestore (native mode) - the Living State Graph
+gcloud firestore databases create --location=us-central1
+
+# Cloud Storage - source video, annotations, build artifacts
+gcloud storage buckets create gs://surggraph-cases-$PROJECT_ID --location=us-central1
+
+# Model Armor template - screens both inbound turns and outbound generated content
+gcloud model-armor templates create surggraph-fhir-outbound --location=us-central1
+```
+
+### Step 4 - Download the dataset
+
+The video and annotations are **not** in this repository - they are ~890MB of licensed research media. **See [`data/README.md`](data/README.md) for the full walkthrough**; UCL's repository sits behind a WAF challenge that blocks scripted downloads, so these must be fetched through a browser.
+
+```
+data/video/video_01/          # SAR-RARP50 video file
+data/annotations/video_01/    # action_discrete.txt, segmentation/, error_annotation.pkl
+```
+
+Then verify what you have:
+
+```bash
+uv run scripts/validate_downloaded_data.py video_01
+```
+
+### Step 5 - Configure the environment
+
+```bash
+cp .env.example .env
+```
+
+Key variables:
 
 | Variable | Used by | Purpose |
 |---|---|---|
 | `SURGGRAPH_PROJECT_ID` | `tools/gemini_model.py` | GCP project for Vertex AI |
+| `SURGGRAPH_REGION` | everywhere | Default `us-central1` |
 | `GEMINI_MODEL` | `tools/gemini_model.py` | Default `gemini-3.5-flash` |
-| `GEMINI_LOCATION` | `tools/gemini_model.py` | Default `global` — the model 404s on every tested regional endpoint |
+| `GEMINI_LOCATION` | `tools/gemini_model.py` | Default `global` - the model 404s on every tested regional endpoint |
+| `GOOGLE_GENAI_USE_VERTEXAI` | `google-genai` | `true` - route through Vertex AI, not the Gemini API |
 | `FIRESTORE_DATABASE` | both services | Named Firestore database, default `(default)` |
+| `SURGGRAPH_GCS_BUCKET` | state service | Video and annotation storage |
 | `FHIR_BASE_URL` | `tools/fhir_write.py`, `tools/fhir_alert.py` | Default `https://hapi.fhir.org/baseR4` |
-| `STATE_SERVICE_URL` | `tools/state_tools.py` | If unset, agents fall back to local JSONL files (scripts/tests) |
-| `SURGGRAPH_WINDOW_S` | `tools/video_utils.py` | Sweep window size, default `5.0` |
-| `SURGGRAPH_SWEEP_START_S` / `SURGGRAPH_SWEEP_END_S` | `tools/video_utils.py` | Optional dev-only bound on how much of the video a case sweeps |
-| `VITE_STATE_SERVICE_URL` / `VITE_ORCHESTRATOR_URL` / `VITE_DEMO_VIDEO_ID` | frontend | Service URLs and which video to load |
+| `STATE_SERVICE_URL` | `tools/state_tools.py` | If unset, agents fall back to local JSONL (scripts/tests only) |
+| `SURGGRAPH_MODEL_ARMOR_TEMPLATE_ID` | `tools/model_armor.py` | Model Armor template ID |
+| `MEDGEMMA_ENDPOINT_ID` | `tools/medgemma_model.py` | Vertex AI endpoint for the documentation model |
+| `MEDASR_ENDPOINT_ID` | `agents/surgbot/speech.py` | Vertex AI endpoint for medical speech-to-text |
+| `SURGBOT_ROOT_AGENT_RESOURCE` | `services/surgbot_service` | Deployed Agent Runtime reasoning engine |
+| `SURGGRAPH_FEEDBACK_KB_ENGINE` | `tools/feedback_kb.py` | Memory Bank engine backing the learning layer |
+| `SURGGRAPH_SWEEP_START_S` / `_END_S` | `tools/video_utils.py` | Optional dev bound on how much video a case sweeps |
+| `SURGGRAPH_ENABLE_CLOUD_TELEMETRY` | `tools/observability.py` | OpenTelemetry export to Cloud Trace |
+| `VITE_STATE_SERVICE_URL` / `VITE_ORCHESTRATOR_URL` / `VITE_SURGBOT_SERVICE_URL` | frontend | Backend URLs, inlined at **build** time |
 
-## 9. Stack
+### Step 6 - Deploy the model endpoints
 
-**Backend:** Python ≥3.12, `google-adk` + `google-genai` (Vertex AI, Gemini), FastAPI + `uvicorn`, `sse-starlette` (SSE), `google-cloud-firestore`, `httpx`/`requests`, `opencv-python-headless` (frame extraction), `faiss-cpu` + `sentence-transformers` (literature corpus fallback), `pydantic` v2 (every schema in the system).
+MedGemma and MedASR are self-deployed from Model Garden. Both are GPU-backed and billed hourly while running.
 
-**Frontend:** React 19, Vite, TypeScript, `@xyflow/react` (graph canvas), `@dagrejs/dagre` (layout).
+```bash
+# MedGemma 4B - g2-standard-24 + 2x NVIDIA L4
+# MedASR      - n1-standard-8  + 1x NVIDIA T4
+```
+
+Deploy both via Model Garden, then set `MEDGEMMA_ENDPOINT_ID` and `MEDASR_ENDPOINT_ID` in `.env`. See [`docs/qa_log.md`](docs/qa_log.md) for the real deploy configurations, measured cold-start behaviour and cost figures.
+
+### Step 7 - Run locally
+
+Four processes, four ports:
+
+```bash
+# terminal 1 - state service (single writer of the Living Graph)
+uv run uvicorn services.state_service.main:app --host 127.0.0.1 --port 8080
+
+# terminal 2 - orchestrator (runs the whole SurgGraph pipeline)
+uv run uvicorn services.orchestrator_service.main:app --host 127.0.0.1 --port 8090
+
+# terminal 3 - SurgBot relay (WebSocket, voice + text)
+uv run uvicorn services.surgbot_service.main:app --host 127.0.0.1 --port 8091
+
+# terminal 4 - frontend
+cd ui/frontend && npm run dev
+```
+
+Open **http://127.0.0.1:5173**, press play on the demo video, and watch the graph build live.
+
+### Step 8 - Deploy SurgBot to Agent Runtime
+
+The five SurgBot reasoning engines are deployed separately from the Cloud Run services:
+
+```bash
+uv run scripts/deploy_surgbot_subagents.py   # the 4 subagents, with Agent Identity
+uv run scripts/deploy_surgbot_agent.py       # the root agent
+uv run scripts/register_surgbot_agents.py    # register all of them in Agent Registry
+```
+
+> A code change inside `agents/surgbot/` does **nothing** in production until the agent is redeployed - the fix landing in git is not the fix landing in the running system. Both deploy scripts pin `google-adk` and `google-genai` explicitly, after an unpinned transitive upgrade broke a redeploy.
+
+### Step 9 - Deploy to Google Cloud
+
+One Cloud Build pipeline builds and deploys all four Cloud Run services:
+
+```bash
+gcloud builds submit --config cloudbuild.yaml
+```
+
+Or wire it to a GitHub trigger for deploy-on-push-to-main.
+
+**Two things the pipeline does that are easy to miss:**
+
+1. **It pulls the dataset media from Cloud Storage before building.** GitHub doesn't have `data/video/` or `data/annotations/` (both gitignored), but the vision agents read frames straight off local disk with no GCS fallback. Without steps 0 and 1 the image builds and deploys perfectly cleanly, then fails *every* case. Upload your media once: `gcloud storage cp -r data/video/video_01 gs://surggraph-cases-$PROJECT_ID/videos/`.
+2. **It deliberately passes no env vars on deploy.** Cloud Run inherits the previous revision's config when deploying with `--image` alone. Several vars were set by hand and aren't derivable from the repo - passing them here would silently wipe them.
+
+### Step 10 - Verify
+
+```bash
+uv run pytest tests/ -q                          # 159 tests
+cd ui/frontend && npx tsc -b                     # NOT --noEmit - see docs/qa_log.md #5
+uv run scripts/validate_graph_chain.py <case_id> # dangling / orphans / reachability
+```
+
+The graph-chain validator is the important one. Firestore has no foreign-key enforcement and the renderer drops a dangling edge without a word, so a case can be badly broken while every write succeeded and every count looks right. **Three separate defects were found by this validator and by nothing else.**
+
+---
+
+## 7. Project Structure
+
+```
+surggraph/
+├── agents/                      # every agent, one module each
+│   ├── orchestrator/            #   opens a case, wires and drives the pipeline
+│   ├── perception/              #   vision sweep + deterministic change-diff layer
+│   ├── error_detection/         #   3 role subagents, aggregation, severity, knowledge base
+│   ├── complication_reasoning/  #   error → patient-specific complication
+│   ├── literature_retrieval/    #   3-API fan-out + reciprocal rank fusion
+│   ├── corrective_replanning/   #   bounded action library selection
+│   ├── divergence_detection/    #   actual vs. proposed trajectory
+│   ├── alert_routing/           #   intent-before-write, gate-checked delivery
+│   ├── verification_gate/       #   fail-closed, read-only by import, no LLM
+│   ├── documentation/           #   MedGemma operative record draft
+│   ├── hitl/                    #   acknowledgment + approval state transitions
+│   └── surgbot/                 #   root agent, 4 subagents, tools, speech, Memory Bank
+│
+├── services/                    # three FastAPI apps, one shared image
+│   ├── state_service/           #   single writer of the Living Graph + SSE fan-out
+│   ├── orchestrator_service/    #   POST /cases/open, HITL endpoints
+│   └── surgbot_service/         #   WebSocket relay: STT → agent → TTS
+│
+├── state/                       # the state layer itself
+│   ├── schema.py                #   20 node types, 13 edge kinds, provenance
+│   ├── node_ids.py              #   the single source of every node/edge ID
+│   └── event_bus.py             #   in-process pub/sub driving the event-driven agents
+│
+├── tools/                       # capabilities, not agents
+│   ├── gemini_model.py          #   global-endpoint Gemini wrapper
+│   ├── medgemma_model.py        #   MedGemma endpoint client
+│   ├── state_tools.py           #   the single graph write path
+│   ├── context_slice.py         #   deterministic per-agent graph slicing
+│   ├── model_armor.py           #   inbound + outbound screening
+│   ├── fhir_write.py / fhir_alert.py   # real external writes, readback-verified
+│   ├── europepmc_rag.py / pubmed_eutils.py / semantic_scholar_api.py
+│   ├── feedback_kb.py           #   the learning layer's retrieval side
+│   └── memory_bank.py           #   GEAP Memory Bank client
+│
+├── ui/frontend/                 # React + Vite + TypeScript
+│   └── src/
+│       ├── pages/home/          #   the landing site
+│       ├── graph/               #   live ReactFlow graph over SSE
+│       ├── surgbot/             #   voice panel, WebSocket client
+│       └── video/               #   player + case trigger
+│
+├── data/                        # datasets (media gitignored - see data/README.md)
+├── docs/                        # architecture diagram, internals, QA log, validation
+├── scripts/                     # deploy, validate, benchmark, E2E test drivers
+├── tests/                       # 159 tests, real-data assertions throughout
+├── cloudbuild.yaml              # CI/CD: 4 Cloud Run services on push to main
+└── Dockerfile                   # one shared backend image, SERVICE_MODULE selects the app
+```
+
+---
+
+## 8. Data Sources
+
+| Source | Role | Note |
+|---|---|---|
+| **[SAR-RARP50](https://rdr.ucl.ac.uk/projects/SAR-RARP50_Segmentation_of_surgical_instrumentation_and_Action_Recognition_on_Robot-Assisted_Radical_Prostatectomy_Challenge/191091)** | Real robot-assisted radical prostatectomy video with per-frame action and instrument-segmentation annotations | One video used end to end. Action IDs reach the perception agent as **opaque numeric hints only** - never a name, never fed back as an answer. |
+| **[SEDMamba error annotations](https://doi.org/10.5522/04/27992702)** | Per-frame error ground truth for the same video | Used **exclusively for offline accuracy measurement.** Never seen by any detection agent at inference time. |
+| **OCHRA** | Observational Clinical Human Reliability Analysis - the published error taxonomy behind the six error categories | The corrective action library is derived from OCHRA's own *normal*-technique indicators, so a corrective action is the stated inverse of an observed deviation rather than novel clinical advice. Provenance tier is recorded in the library file itself. |
+| **CARES** | The published zero-shot multi-agent surgical-error-detection architecture | The three-role detection design is modeled on it, and accuracy is reported against its published macro-F1 of 0.543. |
+| **[Europe PMC](https://europepmc.org/RestfulWebService) · [PubMed E-utilities](https://www.ncbi.nlm.nih.gov/books/NBK25501/) · [Semantic Scholar](https://api.semanticscholar.org/)** | Live literature retrieval at reasoning time | Agent-formulated queries merged by reciprocal rank fusion. No static corpus, no templated query. |
+| **[HAPI FHIR](https://hapi.fhir.org)** (public test server) | The external clinical record destination | Real `Communication` and `DocumentReference` writes, read back to confirm. |
+| **Synthetic patient twin and vitals** | ASA class, BMI, prostate volume, comorbidities; a deterministic vitals stream modeled on real RARP physiology | **Labeled synthetic everywhere it surfaces in the UI**, never presented as a live monitor feed. |
+
+---
+
+## 9. Disclaimer
+
+> ### ⚠️ This is a hackathon project. It is not a medical device.
+>
+> **SurgOS has not been clinically tested, clinically validated, reviewed by a practising surgeon, or evaluated by any regulatory body.** It is a research and demonstration system built for the All Things Agentic Hackathon, and it must not be used to inform any real clinical decision, for any real patient, under any circumstances.
+>
+> **What it actually is:** a literature-grounded hypothesis generator with a fail-closed verification gate and a human approval step on every external write. It proposes; it never decides.
+>
+> **Known limitations, stated plainly:**
+>
+> - Per-window latency runs **~15.8s against a 5s window** - the graph lags real time roughly 3×.
+> - **7 of 17** complications are literature-grounded. Improved from zero, not closed - and the gate correctly refuses to alert on the ungrounded ones.
+> - The detection threshold (1.7) has never been re-tuned; the confusion matrix skews toward **false negatives** across two separate sweeps.
+> - Validated on a **single video**. Generalization is unverified.
+> - Patient twin and vitals are **synthetic**.
+> - The corrective action library is **derived from published error descriptions, not from a clinical guideline**, and has not been reviewed by a practising surgeon.
+> - All twelve in-process pipeline agents currently share one runtime service account.
+>
+> Measured accuracy is tracked in [`docs/validation_results.md`](docs/validation_results.md); every defect found by running the system is in [`docs/qa_log.md`](docs/qa_log.md).
+
+---
+
+## 10. Attributions
+
+**Frameworks and platforms**
+
+- [**Google Agent Development Kit (ADK)**](https://google.github.io/adk-docs/) - agent composition and the `LlmAgent` / `BaseAgent` primitives every pipeline agent is built on.
+- [**Google GenAI SDK**](https://googleapis.github.io/python-genai/) (`google-genai`) - Vertex AI model access.
+- [**Gemini Enterprise Agent Platform**](https://cloud.google.com/vertex-ai) - Agent Runtime, Agent Registry, Agent Identity and Memory Bank host and govern SurgBot.
+- [**FastAPI**](https://fastapi.tiangolo.com/), [**Pydantic**](https://docs.pydantic.dev/), [**React**](https://react.dev/), [**Vite**](https://vite.dev/), [**React Flow**](https://reactflow.dev/), [**dagre**](https://github.com/dagrejs/dagre).
+
+**Research this system builds on**
+
+- **CARES** - the zero-shot multi-agent surgical-error-detection architecture the three-role detection design is modeled on, and the accuracy baseline reported against.
+- **OCHRA** (Observational Clinical Human Reliability Analysis) - the error taxonomy behind the six error categories, their indicators, and the derived corrective action library.
+- **SAR-RARP50** - Segmentation of Surgical Instrumentation and Action Recognition on Robot-Assisted Radical Prostatectomy Challenge, UCL Research Data Repository.
+- **SEDMamba** - the error annotation set for SAR-RARP50, used for offline scoring only.
+- The four clinical studies cited in [The Problem](#1-the-problem): Gawria et al. 2023, Tevis et al. 2016, Laflamme et al. 2005, Ivers et al. 2014.
+
+**Disclosure of pre-existing work.** Everything in this repository was written during the hackathon submission window (first commit 2026-08-12). No pre-existing codebase was carried in. The frameworks above are third-party open-source or Google Cloud products used as intended; the research above is published work this system implements against and cites, not code that was copied.
+
+**Data licensing.** SAR-RARP50 and SEDMamba are research datasets with their own licence terms - see their respective repositories. They are not redistributed here; [`data/README.md`](data/README.md) describes how to obtain them directly.

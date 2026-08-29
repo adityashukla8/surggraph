@@ -55,6 +55,7 @@ import time
 
 from dotenv import load_dotenv
 from google.cloud import aiplatform
+from google.genai import types as genai_types
 from pydantic import BaseModel
 
 load_dotenv()
@@ -69,6 +70,28 @@ MEDGEMMA_ENDPOINT_ID = os.environ.get("MEDGEMMA_ENDPOINT_ID")
 # Recorded as real provenance on every node this model writes, so the graph
 # and the UI say which model actually produced the operative record.
 MEDGEMMA_MODEL_ID = os.environ.get("MEDGEMMA_MODEL_ID", "medgemma-4b-it")
+# Recorded verbatim as provenance whenever the fallback writes the record, so
+# the graph never claims a medical-domain model produced general-model text.
+_FALLBACK_MODEL_ID = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash") + " (fallback)"
+# The endpoint scales to zero, and waking it is minutes, not seconds (226.7s
+# measured on g2-standard-32). "Still booting" is not the same failure as
+# "broken", so it gets waited on rather than counted as a failed attempt —
+# otherwise every cold case would silently be written by the fallback and
+# MedGemma would never write the record it is there to write.
+_SCALE_UP_WAIT_S = float(os.environ.get("MEDGEMMA_SCALE_UP_WAIT_S", "180"))
+_SCALE_UP_POLL_S = 5.0
+
+
+def _is_waking(exc: Exception) -> bool:
+    """True while a scaled-to-zero endpoint is still coming up.
+
+    Vertex answers 429 "Model is not yet ready for inference..." during
+    scale-up. The aiplatform SDK surfaces that as a bare ValueError with the
+    status embedded in the message rather than a typed 429, so this matches
+    the text — confirmed against a real cold endpoint, not assumed.
+    """
+    text = str(exc).lower()
+    return "429" in text and "not yet ready" in text
 
 _endpoint: aiplatform.Endpoint | None = None
 _initialized = False
@@ -142,6 +165,16 @@ class MedGemmaError(RuntimeError):
     substituting a different model's output for a medical-domain one."""
 
 
+def _build_prompt(instruction: str, payload: str, schema_model: type[BaseModel]) -> str:
+    """One prompt for both models, so the fallback answers the same question."""
+    schema_block = json.dumps(schema_model.model_json_schema(), indent=2)
+    return (
+        f"{instruction}\n\n{payload}\n\n"
+        "Respond with ONLY a JSON object matching this schema. No markdown fence, no prose.\n\n"
+        f"{schema_block}"
+    )
+
+
 def _strip_fence(text: str) -> str:
     """Real, repeatedly-observed behaviour of this endpoint: it wraps JSON in
     a ```json fence despite being told not to. Recovering from that is not
@@ -159,6 +192,39 @@ def _strip_fence(text: str) -> str:
     return body.strip()
 
 
+async def _gemini_fallback(
+    step: str, prompt: str, schema_model: type[BaseModel], max_tokens: int
+) -> BaseModel:
+    """Last resort when MedGemma cannot produce a result.
+
+    Uses the raw google-genai client rather than ADK: the prompt already
+    carries the schema for MedGemma's benefit, but Gemini can enforce it
+    natively via response_schema, so the same Pydantic guarantee holds by a
+    stronger mechanism.
+    """
+    from tools.gemini_model import GEMINI_MODEL, new_genai_client
+
+    client = new_genai_client()
+    response = await asyncio.to_thread(
+        lambda: client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema_model,
+                # Gemini 3.5 spends output tokens on thinking, so MedGemma's
+                # budget truncated the JSON mid-string on the first real test.
+                # Thinking is off (this is a formatting task, not a reasoning
+                # one) and the ceiling is raised so the schema always closes.
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                max_output_tokens=max(max_tokens, 2048) * 2,
+                temperature=0.2,
+            ),
+        )
+    )
+    return schema_model.model_validate_json(response.text)
+
+
 async def generate_structured(
     step: str,
     instruction: str,
@@ -166,7 +232,7 @@ async def generate_structured(
     schema_model: type[BaseModel],
     max_tokens: int = 2048,
     attempts: int = 2,
-) -> BaseModel:
+) -> tuple[BaseModel, str]:
     """Real MedGemma call whose output IS the step's result.
 
     ADK's LlmAgent+output_schema path can't be reused here: that is bound to
@@ -177,25 +243,33 @@ async def generate_structured(
     the mechanism differs.
 
     Retries once on a parse/validation failure (a small model occasionally
-    emits a stray prose preamble). After that it raises: there is deliberately
-    no Gemini fallback, because a step that claims to be written by a
-    medical-domain model must not quietly be written by a general one.
+    emits a stray prose preamble), then falls back to Gemini 3.5 so the
+    pipeline still completes when the endpoint is down, unconfigured or
+    failing for any other reason.
+
+    Returns (result, model_id) — the id of the model that ACTUALLY produced
+    the result, never the one that was supposed to. Callers record it as
+    provenance, so a record written by the general model says so instead of
+    inheriting MedGemma's name. Returning it rather than exposing it as
+    module state is deliberate: cases run concurrently, and a shared
+    "last model used" would attribute one case's fallback to another.
     """
     if not medgemma_available():
-        raise MedGemmaError(
-            f"medgemma[{step}]: MEDGEMMA_ENDPOINT_ID is not set. This step runs on MedGemma with "
-            "no fallback, so it cannot proceed unconfigured."
+        logger.warning(
+            "medgemma[%s]: MEDGEMMA_ENDPOINT_ID is not set — falling back to %s",
+            step,
+            _FALLBACK_MODEL_ID,
         )
+        prompt = _build_prompt(instruction, payload, schema_model)
+        return await _gemini_fallback(step, prompt, schema_model, max_tokens), _FALLBACK_MODEL_ID
 
-    schema_block = json.dumps(schema_model.model_json_schema(), indent=2)
-    prompt = (
-        f"{instruction}\n\n{payload}\n\n"
-        "Respond with ONLY a JSON object matching this schema. No markdown fence, no prose.\n\n"
-        f"{schema_block}"
-    )
+    prompt = _build_prompt(instruction, payload, schema_model)
 
     last_error: Exception | None = None
-    for attempt in range(1, attempts + 1):
+    deadline = time.monotonic() + _SCALE_UP_WAIT_S
+    announced_wait = False
+    attempt = 0
+    while attempt < attempts:
         start = time.monotonic()
         try:
             raw = await asyncio.to_thread(_predict_sync, prompt, max_tokens)
@@ -209,9 +283,20 @@ async def generate_structured(
                 schema_model.__name__,
                 attempt,
             )
-            return result
-        except Exception as exc:  # noqa: BLE001 — retried, then re-raised below
+            return result, MEDGEMMA_MODEL_ID
+        except Exception as exc:  # noqa: BLE001 — retried, then handed to the fallback
+            if _is_waking(exc) and time.monotonic() < deadline:
+                if not announced_wait:
+                    announced_wait = True
+                    logger.info(
+                        "medgemma[%s]: endpoint is scaling up from zero — waiting up to %.0fs before falling back",
+                        step,
+                        _SCALE_UP_WAIT_S,
+                    )
+                await asyncio.sleep(_SCALE_UP_POLL_S)
+                continue  # still booting: not a failed attempt
             last_error = exc
+            attempt += 1
             logger.warning(
                 "medgemma[%s]: attempt %d/%d failed after %.2fs: %s",
                 step,
@@ -221,4 +306,21 @@ async def generate_structured(
                 exc,
             )
 
-    raise MedGemmaError(f"medgemma[{step}]: no valid {schema_model.__name__} after {attempts} attempts") from last_error
+    # MedGemma is exhausted. Fall back rather than fail the case — but say so
+    # loudly, and hand the caller the model id that really wrote this.
+    logger.warning(
+        "medgemma[%s]: exhausted %d attempts (%s) — falling back to %s",
+        step,
+        attempts,
+        last_error,
+        _FALLBACK_MODEL_ID,
+    )
+    try:
+        result = await _gemini_fallback(step, prompt, schema_model, max_tokens)
+    except Exception as fallback_error:
+        raise MedGemmaError(
+            f"medgemma[{step}]: no valid {schema_model.__name__} after {attempts} attempts, "
+            f"and the {_FALLBACK_MODEL_ID} fallback also failed: {fallback_error}"
+        ) from last_error
+    logger.info("medgemma[%s]: fallback produced a valid %s via %s", step, schema_model.__name__, _FALLBACK_MODEL_ID)
+    return result, _FALLBACK_MODEL_ID

@@ -229,7 +229,7 @@ function buildTimeline(nodes: GraphNodePatch[]): TimelineItem[] {
         summary: closingOut
           ? "Wrapping up the case before drafting…"
           : drafting
-            ? "Preparing operative report…"
+            ? "Generating report using MedGemma…"
             : blockedByArmor
               ? "Operative note blocked by Model Armor"
               : "Operative note ready for review",
@@ -755,11 +755,15 @@ function DocumentationDetail({
   const blockedByArmor = a.approval_status === "blocked";
 
   if (item.drafting) {
-    // Nothing to review yet — the Gemini call that produces `sections` is
+    // Nothing to review yet — the MedGemma call that produces `sections` is
     // still in flight (or hasn't started: closing_out is the earlier phase
     // draining in-flight divergence monitoring first). Showing the (empty)
     // section list or the approve/reject buttons here would invite a click
     // that has nothing real to act on.
+    //
+    // The wait is named honestly: MedGemma's endpoint scales to zero, so a
+    // cold case really can take minutes. Saying so beats a spinner that
+    // looks stuck.
     const closingOut = a.approval_status === "closing_out";
     return (
       <>
@@ -767,7 +771,7 @@ function DocumentationDetail({
         <p className="aa__framing">
           {closingOut
             ? "Letting in-flight divergence monitoring finish before drafting starts — this usually takes under a minute."
-            : "Drafting from the case's full reasoning graph — this usually takes 1-2 minutes."}
+            : "Generating report using MedGemma — takes 2-3 minutes, thank you for your patience!"}
         </p>
       </>
     );
