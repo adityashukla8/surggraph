@@ -15,9 +15,7 @@ non-negotiable requirement, not a nice-to-have).
 from __future__ import annotations
 
 import logging
-import asyncio
 import os
-import time
 import uuid
 from datetime import datetime, timezone
 
@@ -52,6 +50,8 @@ setup_cloud_observability("surggraph-orchestrator-service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 for _noisy_logger in ("httpx", "httpcore", "google", "google.auth", "urllib3", "websockets", "asyncio"):
     logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SurgGraph Orchestrator Service")
 
@@ -120,45 +120,6 @@ class HitlAcknowledgmentRequest(BaseModel):
 class HitlApprovalRequest(BaseModel):
     outcome: Literal["approved", "rejected", "edited"]
     edited_sections: dict | None = None
-
-
-# --- MedGemma warm-up -------------------------------------------------------
-# MedGemma scales to zero, and waking it takes minutes. It is only needed at
-# the very END of a case (documentation ran 181s after case start in the last
-# real run), so a throwaway request fired the moment a visitor lands gives the
-# GPU a head start it would otherwise have to find during the case itself.
-#
-# It has to be proxied: the Vertex endpoint is IAM-authed, so a browser cannot
-# reach it directly. Fire-and-forget — the caller gets 202 immediately and
-# never waits on the GPU.
-_last_warm = 0.0
-_WARM_EVERY_S = 120.0
-
-
-async def _warm_medgemma() -> None:
-    from tools import medgemma_model
-
-    if not medgemma_model.medgemma_available():
-        return
-    try:
-        # Smallest possible real generation: enough to trigger scale-up,
-        # cheap enough to be free once warm.
-        await asyncio.to_thread(medgemma_model._predict_sync, "OK", 1)
-        logger.info("warm[medgemma]: already warm")
-    except Exception as exc:  # noqa: BLE001 — a 429 here is the POINT: it means scale-up started
-        logger.info("warm[medgemma]: wake-up triggered (%s)", str(exc)[:120])
-
-
-@app.post("/warm", status_code=202)
-async def post_warm(background_tasks: BackgroundTasks) -> dict:
-    """Nudges MedGemma awake. Safe to call on every page view."""
-    global _last_warm
-    now = time.monotonic()
-    if now - _last_warm < _WARM_EVERY_S:
-        return {"warming": False, "reason": "recently warmed"}
-    _last_warm = now
-    background_tasks.add_task(_warm_medgemma)
-    return {"warming": True}
 
 
 @app.post("/cases/{case_id}/hitl/approval")

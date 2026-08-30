@@ -32,7 +32,7 @@ from agents.documentation.subagent import _INSTRUCTION, OperativeNoteDraft
 from state import node_ids
 from state.schema import GraphEdgePatch, GraphNodePatch
 from tools.context_slice import GraphIndex, documentation as documentation_slice
-from tools.medgemma_model import generate_structured
+from tools.gemini_model import GEMINI_MODEL, generate_structured
 from tools.model_armor import join_note_sections, screen_operative_note
 from tools.state_tools import apply_state_patches, get_state_snapshot
 
@@ -193,14 +193,12 @@ async def draft_note(case_id: str) -> str | None:
     )
 
     prompt = _format_case(slice_context, index)
-    # MedGemma writes the operative record — the medical-domain model owns the
-    # medical-writing step, and this is the artifact that reaches a real EHR.
-    # MedGemma writes this record. If it cannot, Gemini 3.5 does — and
-    # generate_structured hands back the model that ACTUALLY produced the
-    # draft, which is what gets recorded as provenance below. The fallback
-    # keeps a case completable; the returned id keeps the record honest about
-    # which model wrote it.
-    draft, drafted_by = await generate_structured(
+    # Gemini 3.5 writes the operative record — the same model every other
+    # agent in this system reasons with. (Was MedGemma, a self-deployed
+    # medical-domain model, undeployed after repeated generation failures
+    # on certain cases regardless of machine shape, GPU count, or token
+    # ceiling — see docs/qa_log.md.)
+    draft = await generate_structured(
         f"documentation:{case_id}",
         _INSTRUCTION,
         prompt,
@@ -292,13 +290,8 @@ async def draft_note(case_id: str) -> str | None:
                         "approval_status": "blocked" if screen.blocked else "pending",
                         "sections": sections,
                         "model_armor_reason": screen.reason,
-                        # Real provenance: normally the medical-domain
-                        # model, but the id comes from the call itself, so a
-                        # record that fell back to the general model says so
-                        # here rather than inheriting MedGemma's name. The
-                        # claim stays checkable in the graph, not just in a
-                        # README.
-                        "drafted_by_model": drafted_by,
+                        # Real provenance, checkable in the graph.
+                        "drafted_by_model": GEMINI_MODEL,
                         # Carried so nothing downstream can present the draft as
                         # more settled than it is.
                         "synthetic_patient": True,

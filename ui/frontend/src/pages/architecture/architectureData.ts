@@ -204,9 +204,8 @@ export const NODES: ArchNode[] = [
   }),
 
   // ---- Shared services -------------------------------------------------
-  N({ id: "vertex", label: "Vertex AI — Gemini 3.5", role: "reasoning for all 12 SurgGraph agents", logo: "gemin.png", kind: "model", x: 362, y: 722, w: 386, h: 82 }),
-  N({ id: "medgemma", label: "Vertex AI — MedGemma 4B", role: "writes the operative record", logo: "medgemma.png", kind: "model", x: 362, y: 820, w: 386, h: 82 }),
-  N({ id: "speech", label: "Vertex AI + Cloud TTS", role: "MedASR in · Chirp 3 HD out", logo: "vertexai.png", kind: "model", x: 362, y: 906, w: 386, h: 76 }),
+  N({ id: "vertex", label: "Vertex AI — Gemini 3.5", role: "reasoning for all 12 SurgGraph agents, including the operative record", logo: "gemin.png", kind: "model", x: 362, y: 722, w: 386, h: 82 }),
+  N({ id: "speech", label: "Vertex AI + Cloud TTS", role: "MedASR in · Chirp 3 HD out", logo: "vertexai.png", kind: "model", x: 362, y: 820, w: 386, h: 76 }),
 
   N({ id: "firestore", label: "Firestore", role: "Living State Graph · 19 node types, 13 edge kinds", logo: "firestore.png", kind: "data", x: 790, y: 722, w: 396, h: 82 }),
   N({ id: "memorybank", label: "Memory Bank (GEAP)", role: "approved feedback, retrieved by similarity", logo: "memorybank.png", mono: "MB", kind: "data", x: 790, y: 820, w: 396, h: 82 }),

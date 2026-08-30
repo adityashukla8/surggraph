@@ -116,7 +116,7 @@ const nodes: Node[] = [
     data: {
       label: (
         <div>
-          <div>Gemini 3.5 · MedGemma 4B</div>
+          <div>Gemini 3.5</div>
           <div style={{ fontWeight: WEIGHT, fontSize: FONT.mainSub, opacity: 0.85, marginTop: 3 }}>
             Multimodal · Vertex AI · 8 reasoning agents
           </div>

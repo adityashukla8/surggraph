@@ -16,17 +16,7 @@ const CATEGORIES: TechCategory[] = [
   {
     label: "AI Models",
     items: [
-      { logo: <img src="/tech-logos/gemin.png" alt="Gemini" />, name: "Gemini 3.5", desc: "Vertex AI · global endpoint, every reasoning call" },
-      {
-        // Unlike every other entry's square icon mark, the real MedGemma asset is
-        // a wide wordmark (666x374) - forcing it into the shared 22x22 icon
-        // slot crushed it down to an illegible sliver, so this one gets its own
-        // wider box sized to its real aspect ratio instead.
-        logo: <img src="/tech-logos/medgemma.png" alt="MedGemma" style={{ width: 90, height: "auto" }} />,
-        name: "MedGemma",
-        desc: "Vertex AI hosted 4B model -  for surgical Complication Reasoning & Clinical Documentation",
-        wideIcon: true,
-      },
+      { logo: <img src="/tech-logos/gemin.png" alt="Gemini" />, name: "Gemini 3.5", desc: "Vertex AI · global endpoint, every reasoning call, including clinical documentation" },
       {
         logo: <img src="/tech-logos/gemin.png" alt="MedASR" />,
         name: "MedASR",
@@ -42,7 +32,7 @@ const CATEGORIES: TechCategory[] = [
   {
     label: "Agent Platform",
     items: [
-      { logo: <img src="/tech-logos/vertexai.png" alt="Vertex AI" />, name: "Vertex AI", desc: "Model serving & endpoints - hosts every Gemini and MedGemma call" },
+      { logo: <img src="/tech-logos/vertexai.png" alt="Vertex AI" />, name: "Vertex AI", desc: "Model serving & endpoints - hosts every Gemini call" },
       {
         logo: <img src="/tech-logos/gemin.png" alt="Gemini" />,
         name: "Gemini Enterprise Agent Platform",

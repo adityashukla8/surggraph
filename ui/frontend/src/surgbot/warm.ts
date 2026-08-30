@@ -32,29 +32,6 @@ export function warmSurgBot(): void {
   });
 }
 
-// MedGemma sits behind Vertex with scale-to-zero and takes minutes to wake,
-// but it is only needed at the very end of a case. Waking it when someone
-// lands on the site — and again when they open the console — spends that
-// start-up against their reading time instead of the case's. Proxied through
-// the orchestrator because the Vertex endpoint is IAM-authed.
-const ORCHESTRATOR_URL = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:8090";
-let lastMedGemmaWarmAt = 0;
-
-export function warmMedGemma(): void {
-  const now = Date.now();
-  if (!ORCHESTRATOR_URL || now - lastMedGemmaWarmAt < REWARM_AFTER_MS) return;
-  lastMedGemmaWarmAt = now;
-  // 202 comes back immediately; the GPU wakes in the background.
-  void fetch(`${ORCHESTRATOR_URL}/warm`, { method: "POST", cache: "no-store" }).catch(() => {
-    // A failed wake-up only costs the case its cold start, which is the
-    // situation we were already in.
-  });
-}
-
-/** Wakes both scale-to-zero backends: SurgBot's container and MedGemma's GPU. */
 export function useWarmSurgBot(): void {
-  useEffect(() => {
-    warmSurgBot();
-    warmMedGemma();
-  }, []);
+  useEffect(() => warmSurgBot(), []);
 }

@@ -57,8 +57,7 @@ const SURGBOT: Svc[] = [
 
 
 const MODELS: Svc[] = [
-  { name: "Vertex AI — Gemini 3.5 Flash", role: "reasoning for all 12 SurgGraph agents and SurgBot", logo: "gemin.png", kind: "model" },
-  { name: "Vertex AI — MedGemma 4B", role: "writes the operative record", logo: "medgemma.png", kind: "model" },
+  { name: "Vertex AI — Gemini 3.5 Flash", role: "reasoning for all 12 SurgGraph agents and SurgBot, including the operative record", logo: "gemin.png", kind: "model" },
   { name: "Vertex AI — MedASR", role: "medical-domain speech recognition", logo: "vertexai.png", kind: "model" },
   { name: "Cloud Text-to-Speech", role: "Chirp 3 HD streaming synthesis", mono: "TTS", kind: "model" },
 ];
@@ -146,8 +145,8 @@ const CONNS: Conn[] = [
   { n: 4, from: "orchestrator", to: "stateservice", label: "Firestore: Graph persistence", desc: "Every finding is written as a state graph rather than held in memory." },
   { n: 5, from: "stateservice", to: "firestore", labelLeg: 1, spec: (ch) => ({ from: "bottom", to: "top", via: [{ y: ch.gapY - 28 }, { x: ch.surgX }] }), label: "FireStore: transactional write", desc: "A transaction increments a monotonic seq, which drives the live SSE fan-out to the console." },
   { n: 6, from: "orchestrator", to: "litapis", label: "Literature retrieval", desc: "Complication Reasoning formulates its own query; three live APIs are merged by reciprocal rank fusion." },
-  { n: 7, from: "orchestrator", to: "medgemma", labelLeg: 1, spec: (ch) => ({ from: "bottom", fromOffset: -90, to: "right", via: [{ y: ch.gapY }, { x: ch.modelsX - 15 }] }), label: "MedGemma: Operative record", desc: "MedGemma drafts the operative record. If it is unavailable Gemini 3.5 drafts it instead, and the node records which model actually wrote it." },
-  { n: 8, from: "medgemma", to: "armor", spec: (ch) => ({ from: "bottom", to: "left", via: [{ y: ch.modelStackY }, { x: ch.govX + 15 }] }), label: "ModelArmor: Screen the draft", desc: "Model Armor screens the draft autonomously, before a surgeon is ever offered an Approve button." },
+  { n: 7, from: "orchestrator", to: "gemini", labelLeg: 1, spec: (ch) => ({ from: "bottom", fromOffset: -90, to: "right", via: [{ y: ch.gapY }, { x: ch.modelsX - 15 }] }), label: "Gemini 3.5: Operative record", desc: "Gemini 3.5 drafts the operative record from the case’s full reasoning graph." },
+  { n: 8, from: "gemini", to: "armor", spec: (ch) => ({ from: "bottom", to: "left", via: [{ y: ch.modelStackY }, { x: ch.govX + 15 }] }), label: "ModelArmor: Screen the draft", desc: "Model Armor screens the draft autonomously, before a surgeon is ever offered an Approve button." },
   { n: 9, from: "orchestrator", to: "fhir", label: "FHIR: Verified write + readback", hitl: true, desc: "After the fail-closed Verification Gate and the surgeon's approval, the DocumentReference and any alert are written to a real external EHR and read back to confirm they landed." },
   { n: 10, from: "surgeon", to: "relay", labelLeg: 2, spec: (ch) => ({ from: "right", to: "top", via: [{ x: ch.cloudEdgeX }, { y: ch.ingestGapY }] }), label: "HITL: Voice/text review", desc: "The surgeon opens SurgBot and reviews the completed case by voice or text." },
   { n: 11, from: "relay", to: "medasr", labelLeg: 2, spec: (ch) => ({ from: "left", to: "right", fromOffset: -8, via: [{ x: ch.surgX - 12 }, { y: ch.gapY }, { x: ch.modelsX }] }), label: "MedASR: Transcribe", async: true, desc: "MedASR transcribes the turn using medical-domain speech recognition." },
@@ -201,7 +200,7 @@ interface Channels {
   cloudEdgeX: number;
   /** Horizontal band between the ingest row and the workflow panels. */
   ingestGapY: number;
-  /** Horizontal lane across the Models stack, between MedGemma and MedASR.
+  /** Horizontal lane across the Models stack, between Gemini and MedASR.
       It also clears the bottom of the shorter State & memory group, so it
       runs the width of Shared services without meeting a card. */
   modelStackY: number;
@@ -589,7 +588,7 @@ export function ArchitectureBoard() {
             modelsX: (models.right + state.left) / 2 - o.left,
             govX: (state.right + (box(".ab__sub--gov")?.left ?? state.right)) / 2 - o.left,
             gapY: (graph.bottom + shared.top) / 2 - o.top,
-            modelStackY: ((find("medgemma")?.bottom ?? 0) + (find("medasr")?.top ?? 0)) / 2 - o.top,
+            modelStackY: ((find("gemini")?.bottom ?? 0) + (find("medasr")?.top ?? 0)) / 2 - o.top,
             botEdgeX:
               bot.right - parseFloat(getComputedStyle(root.querySelector(".ab__panel--bot")!).paddingRight || "14") / 2 - o.left,
             cloudEdgeX:
@@ -739,7 +738,7 @@ export function ArchitectureBoard() {
               <div className="ab__sub ab__sub--boxed ab__sub--models">
                 <span className="ab__sub-title">Models</span>
                 {MODELS.map((s, i) => (
-                  <Card key={s.name} s={s} logos={logos} anchor={["gemini", "medgemma", "medasr", "tts"][i]} />
+                  <Card key={s.name} s={s} logos={logos} anchor={["gemini", "medasr", "tts"][i]} />
                 ))}
               </div>
               <div className="ab__sub ab__sub--boxed ab__sub--state">
