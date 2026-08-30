@@ -16,9 +16,8 @@ export function ArchitectureSection() {
         SurgOS, end to end
       </h2>
       <p className="home__lede" style={{ marginBottom: 28 }}>
-        Every service, model, agent, gate and external write this system actually uses. Externals sit outside the Google
-        Cloud boundary; the numbered walkthrough below follows one case from video to filed record and back again as
-        feedback. Open the diagram for the full-size, interactive version.
+        Every service, model, agent, gate and external write this system actually uses. The numbered walkthrough below follows one case from video to filed record and back again as
+        feedback. Click the image for the full-size, interactive version.
       </p>
       <a
         className="arch__shot"

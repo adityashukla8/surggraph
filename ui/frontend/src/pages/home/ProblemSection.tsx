@@ -39,7 +39,7 @@ const CARDS: ProblemCard[] = [
     body: (
       <>
         <b>15%</b> of general surgery patients develop at least one complication — <b>6%</b> develop more than one.
-        Complications aren't rare edge cases; they're a routine part of the risk every case carries.
+        Some complications/never events can cost up to <b>~$166,000</b>.
       </>
     ),
     benefitHeader: "SurgGraph monitors continuously",
@@ -58,7 +58,7 @@ const CARDS: ProblemCard[] = [
         clinician relies on is routinely two weeks stale.
       </>
     ),
-    benefitHeader: "Wait time cut from days to minutes",
+    benefitHeader: "Wait time cut from days → minutes",
     pairing: "SurgGraph drafts the note automatically at case close — turning a 15-day wait into minutes.",
     citationLabel: "Laflamme et al., 2005 · PMC1560865",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/",
@@ -69,12 +69,11 @@ const CARDS: ProblemCard[] = [
     title: "Feedback rarely changes the next case",
     body: (
       <>
-        <b>28%</b> of clinician feedback interventions improve care quality by 10% or more — the median gain across
-        98 real trials is just <b>4.4 percentage points</b>. Lessons from one case routinely never reach the next.
+        Only <b>4.4%</b> median gain is observed from 98 real trials' feedback interventions.
       </>
     ),
-    benefitHeader: "SurgOS drives collective case context",
-    pairing: "SurgOS's Learning Loop routes every surgeon's feedback into knowledge which SurgGraph's agents automatically consult.",
+    benefitHeader: "SurgOS ensures current case feedback improves next cases' workflow",
+    pairing: "SurgOS's Learning Layer routes every surgeon's feedback into knowledge which SurgGraph's agents automatically consult.",
     citationLabel: "Ivers et al., 2014 · J Gen Intern Med · PMC4238192",
     citationHref: "https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/",
   },

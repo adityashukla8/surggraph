@@ -21,7 +21,7 @@ export function Hero() {
               {[
                 <><b>SurgGraph (Autonomous Workflow)</b> watches the surgery, autonomously detects errors, reasons complications, and writes real-time FHIR records</>,
                 <><b>SurgBot (Feedback Workflow)</b> reviews every case with a surgeon and captures structured feedback</>,
-                <><b>The feedback layer</b> turns that feedback into knowledge every future case draws on</>,
+                <><b>The feedback layer</b> turns that feedback into knowledge base that improves SurgGraph Agents</>,
               ].map((step, i) => (
                 <li key={i}>{step}</li>
               ))}
@@ -31,15 +31,15 @@ export function Hero() {
           <div className="home__hero-visual-caption">
             <span className="home__hero-pill">
               <span className="home__hero-pill-dot" />
-              Live Gemini reasoning
+              Gemini 3.5
             </span>
             <span className="home__hero-pill">
               <span className="home__hero-pill-dot" />
-              Fail-closed & HITL by design
+              Vertex AI
             </span>
             <span className="home__hero-pill">
               <span className="home__hero-pill-dot" />
-              FHIR writes
+              Gemini Enterprise Agent Platform
             </span>
           </div>
 

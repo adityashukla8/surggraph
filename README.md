@@ -1,11 +1,10 @@
 <div align="center">
 
-# SurgOS: Autonomous, Continuously Improving Surgical Safety System
+# SurgOS: Autonomous, Continuously Improving Surgical Safety System<br>[TaskMaster + Collaborative Assistant on GEAP]
 
-**SurgOS watches a robotic surgery in real time, catches technique errors as they happen, reasons about where they lead using live published literature, and writes a real clinical record - then reviews the case with the surgeon by voice/text and carries their feedback to improve next sessions.**
+**SurgOS watches a robotic surgery, catches technique errors as they happen, reasons about where they lead using live published literature, and writes a real clinical record - then reviews the case with the surgeon by voice/text and carries their feedback to improve next sessions.**
 
 [![Gemini 3.5](https://img.shields.io/badge/Gemini_3.5_Flash-Vertex_AI-4285F4?logo=googlegemini&logoColor=white)](https://cloud.google.com/vertex-ai)
-[![MedGemma](https://img.shields.io/badge/MedGemma_4B-Vertex_AI-4285F4?logo=google&logoColor=white)](https://developers.google.com/health-ai-developer-foundations)
 [![MedASR](https://img.shields.io/badge/MedASR-Vertex_AI-4285F4?logo=google&logoColor=white)](https://developers.google.com/health-ai-developer-foundations)
 [![ADK](https://img.shields.io/badge/Google_ADK-Agent_Development_Kit-34A853?logo=google&logoColor=white)](https://google.github.io/adk-docs/)
 [![GEAP](https://img.shields.io/badge/Gemini_Enterprise_Agent_Platform-Agent_Runtime_·_Registry_·_Identity_·_Memory_Bank-1A73E8?logo=googlecloud&logoColor=white)](https://cloud.google.com/vertex-ai)
@@ -14,9 +13,9 @@
 [![Model Armor](https://img.shields.io/badge/Model_Armor-fail--closed-EA4335?logo=googlecloud&logoColor=white)](https://cloud.google.com/security-command-center/docs/model-armor-overview)
 [![FHIR](https://img.shields.io/badge/HL7_FHIR-real_external_writes-DA291C)](https://hapi.fhir.org)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-159_passing-brightgreen)](#6-spin-up-instructions)
+[![Tests](https://img.shields.io/badge/tests-159_passing-brightgreen)](#9-spin-up-instructions)
 
-**Built for:** [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/) · Taskmaster track
+**Built for:** [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/) · Taskmaster track + Collaborative Assistant deployed on GEAP
 
 **Live Demo:** _(demo video - add URL)_
 
@@ -31,36 +30,43 @@
 1. [The Problem](#1-the-problem)
 2. [The Solution: What SurgOS Does](#2-the-solution-what-surgos-does)
 3. [Architecture](#3-architecture)
-4. [How It Works](#4-how-it-works)
-5. [Google Cloud Services](#5-google-cloud-services)
-6. [Spin-Up Instructions](#6-spin-up-instructions)
-7. [Project Structure](#7-project-structure)
+4. [Breaking it Down: How SurgOS Works](#4-breaking-it-down-how-surgos-works)
+5. [State Management: the Living Graph](#5-state-management-the-living-graph)
+6. [How It Was Built](#6-how-it-was-built)
+7. [Google Cloud Services](#7-google-cloud-services)
 8. [Data Sources](#8-data-sources)
-9. [Disclaimer](#9-disclaimer)
-10. [Attributions](#10-attributions)
+9. [Spin-Up Instructions](#9-spin-up-instructions)
+10. [Project Structure](#10-project-structure)
+11. [Accomplishments](#11-accomplishments)
+12. [What's Next](#12-whats-next)
+13. [Built With](#13-built-with)
+14. [Disclaimer](#14-disclaimer)
+15. [Attributions](#15-attributions)
 
 ---
 
 ## 1. The Problem
 
-**Surgical errors compound into complications.**
+**Surgical errors compound into patient complications.**
 
-**Complications impact patient outcomes.** 
+**Complications impact patient outcomes & health systems** - _some complications costing up to $166,000 per patient!_
 
-**Avg. Surgical documentation falls days behind the case that needed it.**
+**Avg. surgical documentation time is 14 days after the actual case.**
 
-**And feedback from one case rarely reaches the next.**
+**And feedback from one case rarely reaches the next -** complications from one case can happen in the next case too.
 
-Real example: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/), a stitching needle slipped out of view during a robotic prostate operation and was lost inside the patient. Finding it meant stopping to search and X-ray - and [X-rays miss needles under 10 mm about 70% of the time](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/). Leaving one behind is what hospitals call a *never event*: roughly [1 in 10,000 operations](https://pmc.ncbi.nlm.nih.gov/articles/PMC12768046/), at an average cost of [about $166,000](https://www.aorn.org/outpatient-surgery/article/the-high-cost-of-retained-surgical-items) each time.
+> _**Real example**: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/), a stitching needle slipped out of view during a robotic prostate operation and was lost inside the patient. Finding it meant stopping to search and X-ray - and X-rays miss needles under 10 mm about **70% of the time**. Leaving one behind is what hospitals call a *never event*: roughly **1 in 10,000 operations**, at an average cost of **about $166,000** each time._
 
-**The needle was on camera the whole time it went missing.** Nobody was watching that feed, nothing reasoned about where it had gone, the operative note was written weeks later, and none of it reached the next case.
+>**The needle was on camera the whole time it went missing.** Nobody was watching that feed, nothing reasoned about where it had gone, the operative note was written weeks later, and none of it reached the next case.
+
+### The evidence
 
 | The problem | Impact |
 |---|---|
-| **26.4% of patients** who have something go wrong during an operation go on to develop a serious complication - against 12% of patients where nothing does. One missed step rarely stays contained. <br>[Gawria et al., 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/) | Longer stays, repeat surgery |
-| **15% of surgery patients** develop at least one complication, and 6% develop more than one. Not an edge case - the baseline risk of operating. <br>[Tevis et al., 2016](https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/) | Never events cost ~$166,000 |
-| **374 hours - over 15 days** is how long the average operating note takes to be written up and signed off. The record everyone else relies on is routinely two weeks stale. <br>[Laflamme et al., 2005](https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/) | Hours of delay, Follow-up care flies blind |
-| **Only 28% of feedback programmes** for clinicians improve care by 10% or more; across 98 trials the typical gain was 4.4 points. What one team learns rarely reaches the next. <br>[Ivers et al., 2014](https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/) | Same mistake, next patient |
+| **26.4% of patients** who have something go wrong during an operation go on to develop a serious complication - against 12% of patients where nothing does. One missed step rarely stays contained. <br>[Gawria et al., 2023 · PMC10095268](https://pmc.ncbi.nlm.nih.gov/articles/PMC10095268/) | Longer stays, repeat surgery |
+| **15% of surgery patients** develop at least one complication. Not an edge case - the baseline risk of operating. <br>[Tevis et al., 2016 · PMC6214627](https://pmc.ncbi.nlm.nih.gov/articles/PMC6214627/) | Events like needle lost can cost upto ~$166,000 per incident |
+| **374 hours - over 15 days** is how long the average operating note takes to be written up and signed off. The record everyone else relies on is routinely two weeks stale. <br>[Laflamme et al., 2005 · PMC1560865](https://pmc.ncbi.nlm.nih.gov/articles/PMC1560865/) | Hours of delay, Follow-up care flies blind |
+| **Only 28% of feedback programmes** for clinicians improve care by 10% or more; across 98 trials, typical gain was just 4.4 points. _**What one team learns rarely reaches the next.**_ <br>[Ivers et al., 2014 · PMC4238192](https://pmc.ncbi.nlm.nih.gov/articles/PMC4238192/) | Same mistake, next patient |
 
 >**The operating room generates the richest signals in medicine and most of it is never fully leveraged - in the moment, in the record, and in the loop back to the next case.**
 
@@ -68,20 +74,25 @@ Real example: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/article
 
 ## 2. The Solution: What SurgOS Does
 
+- **SurgOS watches a surgery as it happens**
+- **Catches mistakes in the moment**
+- **Works out where they lead, files a real medical record**
+- **Reviews the case with the surgeon and carries what they say into every case after it.**
+
 | Feature | Impact |
 |---|---|
-| **Watches the surgery** - Gemini 3.5 vision over 5-second windows | Continuously updated case context - each instrument movement, interaction with anatomy, phase - automatically logged. **107 nodes / 144 edges from a 90-second window, with nobody watching.** |
-| **Autonomously detects technique errors** - 3 independent agents (temporal, spatial, procedural) vote; deterministic aggregation decides | Errors surface **in the window instant they occur**, _not in a chart review weeks later_. |
-| **Reasons about downstream complications** - patient-specific, grounded in literature retrieved at call time | Tells the surgeon **where the error is likely to lead for *this* patient at _this_ instant** - their BMI, ASA class, prostate anatomy - backed by the medical literature search, rather than a generic risk score. |
-| **Proposes a corrective plan** - from a bounded, OCHRA-derived action library, never free-form clinical text | Suggests **actionable next step to avoid the complication.** And when the system isn't confident, it says *"Escalate - no confident corrective match"* rather than sending a surgeon down a plan it can't stand behind. |
-| **Watches the trajectory and alerts on divergence** - deterministic graph check first, LLM only if ambiguous | **Silence when the plan is followed.** Alarm fatigue is designed out: the system only speaks when the case actually diverges from the safer path. |
-| **Generates the full operative record in minutes** - drafted by MedGemma 4B, a medical-domain model | **Reduces the avg wait time from 374 hours to ~4 minutes.** The record is accurate because it's assembled from what was *observed*, not recalled two weeks later - and the whole care team gets it while it still matters. |
-| **Writes divergences and documentation to a real FHIR endpoint** | Findings land **where the rest of the care team already looks**. Every write is read back to confirm it arrived. |
-| **Refuses to write what it can't evidence** - a fail-closed gate, deliberately not an LLM | A surgeon can trust an alert because the system is **structurally unable to raise errir without evidence.** Blocked writes stay visible on the graph, so what *didn't* go out is auditable too. |
-| **Screens every input and output** - Model Armor, one template, both directions | A hostile or malformed instruction **never reaches the model**, and nothing unsafe reaches the record - protecting both the patient's data and the integrity of what gets filed under a surgeon's name. |
-| **Keeps a human on every external write** - 3 human-in-the-loop gates | **No autonomous action ever reaches a patient's chart.** The surgeon stays the decision-maker; the system does the work and waits to be told yes. |
-| **Lets surgeons and safety teams review the case by voice** - SurgBot's 6-phase conversational review | Patient-safety review in **minutes, hands-free, without opening a chart** - across one case or all of them. Real cross-case analysis over **103 cases** surfaced "out of view" (174) and "needle handling" (117) as the dominant failure modes. |
-| **Learns from what the surgeon says** - approved feedback routed to the specific agent it belongs to | Feedback given **once** changes every future case meaningfully, leading to **improved error detection and improved patient safety.**
+| **Watches the surgery** - Gemini 3.5 vision over 5-second windows | A continuous log: running picture of the case builds itself. Every instrument move, contact with anatomy and step change, logged as it happens. Nobody has to watch or remember. |
+| **Detects mistakes on its own** - 3 agents (time, position/space, procedure) vote; a non-AI scoring step decides | Mistakes surface **the instant they happen**, not in a review weeks later. No single AI agent can raise one alone. |
+| **Works out what complication can each mistake could lead to** - reasoning grounded in medical papers pulled live | Tells the surgeon **where this mistake is likely to lead for *this* patient** - their build, overall health, anatomy - backed by real papers, not a generic risk score. |
+| **Suggests a fix** - chosen from a pre-approved list of actions, never free-written | A specific next step to avoid the complication. When it isn't confident, **it says so** instead of guessing. |
+| **Checks whether the recommended fix was followed** - rules-based check first, Gemini only when unclear | **Silent when the surgeon follows the plan.** It speaks up only when the case actually goes off it - no alarm fatigue. |
+| **Writes the full operating note in minutes** - drafted from the case as it was observed | **374 hours down to ~4 minutes.** Accurate because it's built from what was seen, not recalled two weeks later - and the team gets it while it still matters. |
+| **Files alerts and the note to a real medical record system** - FHIR | Findings land **where the care team already looks**. Every write is read back to confirm it arrived. |
+| **Refuses to file anything it can't back up** - a rules-based gate, not an AI one | A surgeon can trust an alert because the system **can't raise one without evidence**. Blocked writes stay on record, so what *didn't* go out is visible too. |
+| **Screens everything going in and out** - Model Armor, one policy, both directions | A hostile or malformed instruction **never reaches the model**, and nothing unsafe reaches the record filed under a surgeon's name. |
+| **Keeps a human on every external write** - 3 approval gates | **Nothing reaches a patient's chart on its own.** The system does the work and waits to be told yes. |
+| **Lets surgeons and safety teams review cases by voice** - SurgBot's 6-phase review | Review in **minutes, hands-free** - one case or all of them. Across **103 cases** it surfaced "out of view" (174) and "needle handling" (117) as the top failure modes. |
+| **Learns from what the surgeon says** - approved feedback routed to the agent that needs it | Feedback given **once** shapes every case after it: better detection, fewer repeat mistakes. |
 
 ---
 
@@ -91,168 +102,219 @@ Real example: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/article
 
 > **[Open the full-resolution diagram →](docs/architecture/surgos-architecture-full-4k.png)**
 
-- **SurgBot**: The Feedback Workflow
-- Runs **5 separately deployed reasoning engines on the Gemini Enterprise Agent Platform** - Agent Runtime for the engines, Agent Registry for discovery, Agent Identity (SPIFFE) on the tool-free subagents, and Memory Bank as the substrate of the learning layer. Low call volume, managed sessions, native cross-session memory.
+> **Decoupled Autonomous & Feedback Workflow with HITL gates**
 
-### State Management: The Living State Graph
+- The verification gate, vote aggregation, severity scoring, literature ranking, alert routing, the first divergence check and the whole perception change-diff layer. 
+- **Safety _decisions_ come from steps an AI model isn't allowed to touch -** maintaining Human in The Loop and gated workflow.
+- **Model choice is per-step, not global.** Gemini 3.5 Flash for reasoning and vision, with native structured output where a step's result has to match a schema. 
+- **MedASR** for speech, where the domain genuinely changes the answer: 5.2–6.9% error rate on medical dictation, against Whisper large-v3's 12.5–28.2%.
+- **Decoupled design** 
+  - **SurgGraph service** focuses on error & complication workflow
+  - The **FireStore state service** serves as _multi-tenant, cross-case graph storage accessible to both SurgGraph, SurgBot_ & any downstream future analytics - not limited to SurgGraph agents.
+  - **The SurgBot** can read the graph and **cannot change it**.
 
-**State lives entirely in one shared, typed graph in Firestore**, and every agent reads and writes it through a single API.
+### Error handling
 
-- **20 node types, 13 edge kinds** - from `entity` and `phase` through `error`, `complication`, `literature_evidence`, `corrective_trajectory`, `divergence_alert`, `verification_block` and `documentation`.
-- **One Firestore document per case**. Every write is a real transaction, so concurrent writers serialize instead of racing. One isolated graph per case.
-- **Real-time fan-out** via Firestore `on_snapshot`. The console renders live over SSE.
-- **Node IDs come from one module** (`state/node_ids.py`), never hand-formatted by an agent.
+- **Fail-closed on safety, fail-soft on enrichment.** Two criticality classes, opposite defaults. Anything gating an *external* action blocks when uncertain; anything *enriching reasoning* degrades to empty rather than taking a live case down with it.
+- **Failures are isolated, never cascaded.** No single agent's failure can fail the case. Independent stages are independently guarded, so one failing never blocks another or blocks case close.
+- **In-flight work is drained, not cancelled.** Event-driven handlers get a bounded budget to finish before a case closes, so reasoning triggered by the last event of a case isn't killed mid-flight.
+- **Every degradation is a typed record in shared state, not a log line.** A blocked write, a low-confidence escalation, a missing evidence source, a partial sample — each is a first-class node any agent or human reviewer can see. **No path in this system fabricates a plausible-looking result:** a failure state must look like a failure, never a quieter version of success.
 
-### The deterministic / LLM boundary
->Surgical analysis can afford probabilistic reasoning, but never a probabilistic execution path.
+### Security
 
-**An LLM reasons over evidence. It never does arithmetic, never gates safety, never receives the answer key.** 
+- **Model Armor both directions, one policy.** 
+  - `sanitize_user_prompt` on the surgeon's turn **before Gemini sees it**
+  - `sanitize_model_response` on generated content **before a human sees it**. 
+- **Human input is treated as untrusted, exactly like model output.** An edited note is re-screened and re-checked before filing. Feedback that fails screening stays in Firestore with `memory_written=false` and never reaches Memory Bank.
+- **Three service accounts, disjoint powers.** 
+  - `surggraph-cicd` deploys but can't read data. 
+  - `surggraph-runtime` reads data but can't deploy. 
+  - The frontend service runs with **zero roles**. 
 
+- >*A compromised agent can't deploy, a compromised build can't read data, the frontend can do neither.* 
 
-The verification gate, weighted aggregation, severity scoring, literature rank fusion, alert routing, the first-pass divergence check and the entire perception change-diff layer are all designed keeping this principle in mind.
+- **Agent Identity (SPIFFE), no long-lived keys**.
+- **CORS is explicit per service**, never a wildcard. 
+
+### Observability & Monitoring
+
+- **OpenTelemetry spans to Cloud Trace** across every service - one at case open, one per sweep, one per triggered agent linked to what triggered it, and one per model call.
+- **Every record carries provenance** - which agent, which tool - enforced at the schema level, so any claim traces back to the call that made it.
+- **Test driven development: 159 tests passing**, plus a graph-chain validator that runs after every change that writes to the graph, because unit tests provably don't catch this class of bug.
 
 ---
 
-## 4. How It Works
+## 4. Breaking it Down: How SurgOS Works
 
-SurgOS is one system running two workflows, driven by a common learning/feedback layer.
+One system, two workflows, joined by a learning layer.
 
-```mermaid
-flowchart LR
-    VID(["Surgical video frames<br/>+ patient twin"]) ==> A1
-    A1["<b>1. SurgGraph</b><br/>ACTS<br/>12 in-process ADK agents<br/>Cloud Run + Vertex AI"]
-    A2["<b>2. SurgBot</b><br/>REVIEWS<br/>root + 4 subagents<br/>GEAP Agent Runtime"]
-    A3["<b>3. Learning Layer</b><br/>TEACHES<br/>routing + Memory Bank"]
+### 1. SurgGraph - the autonomous workflow
 
-    A1 ==> FHIR(["FHIR record + alert<br/>real external EHR"])
-    A1 -.->|completed case| A2
-    VOICE(["Surgeon voice"]) ==> A2
-    A2 ==> DOC(["Approved review"])
-    A2 -.->|on approval ONLY| A3
-    A3 ==>|advisory context<br/>at inference| A1
-```
+>An event-driven workflow with autonomous routing: **12 ADK agents on Cloud Run + Vertex AI** that watch a case, work out what happens next, and run it start to finish with nobody steering.
 
-**1. SurgGraph - the autonomous workflow.**
-
-An event-driven workflow with autonomous routing: 12 ADK agents on Cloud Run + Vertex AI that watch a case, work out what needs to happen next, and drive it start to finish without anyone steering each step.
-
-- **One trigger, end to end.** A case opens on `POST /cases/open` and runs all the way to a filed clinical record with **zero human input**.
-- **A coordinator.** The Orchestrator opens the case, writes the full agent topology up front, subscribes every event-driven agent to the bus, and then steps out of the way.
-  - _**It never decides what happens next itself - the case does.**_
+- **One trigger, end to end.** A case opens on `POST /cases/open` and runs to a filed medical record with **zero human input**.
 - **Watches for change on two channels at once.**
-  - *In the video* - 
-    - `Perception Agent` watches the surgery and maintains state - each instrument movement, anatomy interaction, phases etc.
-    - `Error Detection Agents (3 sub agents)` watches the same window and votes for error presence. 
-    - **All 4 agents run in parallel** sweeps over 5-second windows, making tight, high-volume calls per window.
-  - *In the state* 
-    - Every graph write publishes to an in-process event bus - **all downstream agents have _real-time_ case progression context.**
-- **Autonomous routing - each stage decides what runs next.**
-  - An error vote from Error Detection agents
-  
-    → wakes Complication Reasoning 
-    
-    → a complication wakes Corrective Replanning 
-    
-    → a corrective plan wakes Divergence Detection 
-    
-    → a divergence wakes Alert Routing.
-  - Nothing is scheduled and nothing runs on a fixed timetable. A stage fires **only because the case actually produced the thing it reacts to**.
-- **Interacts with real external systems.**
-  - **3 live literature APIs** (Europe PMC, PubMed E-utilities, Semantic Scholar) queried at reasoning time and merged by rank fusion.
-  - **Model Armor** screens the drafted record the moment it's written, before any human sees it.
-  - **Real FHIR writes** - docs written to HAPI FHIR with a `Communication` record for alerts, a `DocumentReference` for the operative record - each read back to confirm it landed.
-  - **Firestore and Cloud Storage** for state, transactional and per-case isolated.
-- **Human in The Loop Design.** It ends with a real external clinical write and a drafted operative record sitting in an approval queue - the one thing it will not do on its own.
+  - *In the video* - `Perception` tracks instruments, anatomy and steps; `Error Detection` (3 sub-agents) votes on whether something went wrong. All 4 run in parallel over 5-second windows.
+  - *In the state* - every write publishes to an in-process event bus, so every agent downstream has live case context.
+- **Autonomous routing - each stage decides what runs next.** A detected mistake wakes Complication Reasoning → a complication wakes Corrective Replanning → a plan wakes Divergence Detection → a divergence wakes Alert Routing. Nothing is scheduled. A stage fires **only because the case produced the thing it reacts to**.
+- **Interacts to real outside systems.** 
+  - 3 live medical-literature APIs at reasoning time
+  - **Model Armor** screening the draft the moment it's written
+  - Real **FHIR writes** to an external record server, each read back to confirm
+  - **Firestore** and **Cloud Storage** for state and media.
+- **Stops where a human takes over.** It ends with a real external write and a drafted note in an approval queue - the one thing it won't do alone.
+
+### 2. SurgBot - the collaborative feedback workflow
+
+>A **stateful, multi-turn reviewer** that pulls real case context live and remembers the reviewer between sessions 
+
+**5 reasoning engines on the Gemini Enterprise Agent Platform**.
+
+- **Reviews with a surgeon or safety team, by voice or text.** One case or all of them. SurgBot only *reads* what SurgGraph produced; it never touches the pipeline.
+- **Stateful, multi-turn dialogue.** A 6-phase review - `case briefing, walkthrough, mistake review, fix-and-divergence review, written summary, cross-session patterns` - held in one continuous **Agent Runtime managed session**. Not a rigid script: the reviewer can skip ahead or double back and the conversation keeps its place.
+- **Real-time context retrieval.** 9 tools pull exactly the context each turn needs - live case state, the full chain behind one mistake including the papers retrieved at the time, and aggregate stats across every case. It **says when a sample is partial** rather than implying full coverage.
+- **Asks, then captures.** Every finding ends with an explicit ask - agree / disagree / unsure - plus free-text notes, recorded as they happen.
+- **Adapts in the session, personalises across them.** Ask for bulleted answers and the **very next reply is bulleted**. Come back later and **Memory Bank** greets you with your own patterns. With no history yet, it says so - it never invents one.
+
+**How an organisation discovers, audits, trusts and scales these agents**
+
+- **Discovery** - all **6 agentic services** registered in **Agent Registry**, found and inspected through the console, not this repo.
+- **Orchestration at scale** - the root agent dispatches to 4 specialists via `async_stream_query`. Each is separately deployed and independently redeployable; changing one doesn't touch the others. Running against **103 real cases**.
+- **Long-term state, three tiers** - 
+  - **Agent Runtime sessions** within a review
+  - **Firestore** as the system of record
+  - **Memory Bank** for durable cross-session facts, written only on approval.
+- **Runtime OTel observability** - every tool call is shown live, naming the real agent, model and API behind it. **OpenTelemetry spans to Cloud Trace** across every service, and every record carries provenance back to the call that made it.
+- **Security** - 
+  - **Model Armor** both directions, fail-closed - **Agent Identity** (SPIFFE) on the subagents, no long-lived keys
+  - Deploy rights and data rights held by different identities, and the frontend holds **zero roles**
+  - An **edited document is re-screened** and re-checked by **Model Armor** before filing, _because human input is treated as untrusted too_.
+
+### 3. The learning layer - what closes the circuit
+
+>Memory that outlives the session and crosses into the other workflow
+
+What a surgeon says in a review becomes context the autonomous pipeline reads on the next case.
+
+- **Approval-gated.** Nothing becomes durable knowledge until the surgeon approves the review. **The approval is the write.**
+- **Classified, then routed.** Feedback goes to the agent responsible for it - literature feedback to the literature agent, and so on.
+- **Screened first.** Model Armor checks human text before it can ever become part of a prompt.
+- **Stored twice, on purpose.** Firestore as the record; Memory Bank as the index, scoped so an agent only sees feedback meant for it.
+- **Advisory only, by design.** Agents are forbidden from suppressing findings, and **unable to touch the verification gate** - a surgeon's opinion can shape the reasoning, never unlock a write the evidence doesn't support.
+
+This third piece is why SurgOS is a loop and not a detector.
+
+---
+
+## 5. State Management: the Living Graph
+
+**A continuous context state lives in one shared graph in Firestore**, written through a single API.
+
+- **20 node types, 13 edge kinds.** Every agent's output is a record other agents can read, never a private variable.
+- **One Firestore document per case**, with a counter each write increments inside a transaction - so two agents writing at once queue instead of clobbering each other. One isolated graph per case.
+- **Live updates** via Firestore's `on_snapshot`, scoped to everything newer than what the client already has. The console streams over SSE.
+- **IDs come from one module**, never hand-written by an agent - which is what stops links breaking when two agents disagree on a naming convention.
+
+One graph, three jobs:
+
+- **Live case context** - each agent gets a slice assembled before the call, so the same graph always produces the same slice.
+- **The operating note** - already written by the time the case ends. The record is a by-product of reasoning that already happened, not a separate writing job.
+- **SurgBot's history** - a reviewer can walk a case that finished days ago, or aggregate across a hundred.
+
+---
+
+## 6. How It Was Built
+
+Two workflows, two runtimes. The split is a measured decision, not a limitation.
+
+**SurgGraph - Cloud Run + Vertex AI.** 12 ADK agents, one background task per case. Four reasons:
+
+- High call volume per 5-second window - 100s of graph nodes/state written every 1 minute of video analysis
+- The in-process event bus breaks the moment a case's agents split across processes.
+
+**SurgBot - Gemini Enterprise Agent Platform.** 5 separately deployed reasoning engines on Agent Runtime, fronted by a Cloud Run WebSocket relay:
+
+- Low call volume, one turn every few seconds.
+- Managed sessions with real `session_id` continuity.
+- Memory Bank as the native home of the learning layer.
+- Agent Identity works here, because these subagents make no outbound Google Cloud calls.
 
 
-**2. SurgBot - the collaborative feedback workflow.**
+### Orchestration
+#### SurgGraph Orchestration
+| Component | Layer | What it does |
+|---|---|---|
+| **Perception** | SurgGraph | One Gemini 3.5 vision call per 5-second window over locally extracted frames. Detects entities/relation/activity. A steady state emits nothing and downstream agents never fire on noise. |
+| **Error Detection - Temporal** | SurgGraph | Reasons over motion across the window: hesitation, retries, multi-attempt patterns. One of three independent perspectives on the same frames. |
+| **Error Detection - Spatial** | SurgGraph | Judges instrument and anatomical positioning at native resolution - where things sit relative to each other, and what left the field of view. |
+| **Error Detection - Procedural** | SurgGraph | Compares observed technique against expected protocol for the current step, against the six OCHRA-derived error categories. |
+| **Weighted Aggregation + Severity** | SurgGraph | **Deterministic Python, no model.** Takes the three roles' opinions, compiles agreement and a composite score above threshold to raise an error, then scores severity. **Consensus arithmetic in surgical space is not a thing AI should be doing.** |
+| **Complication Reasoning** | SurgGraph | Event-driven off error nodes above a severity threshold. **Formulates a literature query from live case context**, reasons over the retrieved abstracts, and writes complications linked back to their evidence - with rationale specific to *this* patient's risk profile. |
+| **Literature Retrieval** | SurgGraph | **Tool**: Three live APIs queried in parallel - _Europe PMC, PubMed E-utilities, Semantic Scholar_ - merged by reciprocal rank fusion with DOI dedup. **Every citation traces to a real query.** |
+| **Corrective Replanning** | SurgGraph | Event-driven off complications. Selects from a bounded, OCHRA's own normal-technique indicators, or escalates when nothing fits. *Never invents a novel procedure.* |
+| **Proposal Acknowledgment** | SurgGraph · HITL | The surgeon acknowledges or dismisses a live proposal. Acknowledging keeps monitoring as advisory; dismissing stops it. The decision is durable graph state, so it survives a restart. |
+| **Divergence Detection** | SurgGraph | Polls only while a proposal is actually live. Deterministic graph check first - **did the same error fire again** - with LLM reasoning only when that's ambiguous. Writes nothing when the plan is followed. |
+| **Alert Routing** | SurgGraph | **Deterministic.** Writes the pending external action to the graph **before** sending it, calls the gate synchronously, and executes only on a pass - so a blocked alert leaves a visible record of what didn't go out. |
+| **Verification Gate** | SurgGraph | Eleven structural checks over the graph, fail-closed. Read-only: **it cannot write the action it approves, only return pass or block**. |
+| **Documentation** | SurgGraph | Drafts the operative record from the case graph, so the *note is assembled from what was observed rather than recalled. Screened by Model Armor* the moment it's drafted, before a surgeon sees an Approve button. |
+| **Operative Record Approval** | SurgGraph · HITL | Approve, edit or reject. An edit is re-screened by Model Armor and re-checked by the gate before filing - human input is treated as untrusted, exactly like model output. |
+| **FHIR Write Executors** | SurgGraph · Tool | Thin adapters, not reasoning agents. *Real `Communication` and `DocumentReference` writes to a live HAPI FHIR server*, each read back to confirm it landed. |
 
-A stateful, multi-turn collaborative reviewer that retrieves real case context live and remembers the reviewer between sessions - deployed as a discoverable, individually governed fleet of 5 reasoning engines on the Gemini Enterprise Agent Platform.
-
-- **Reviews with a surgeon or patient-safety team, by voice or text.** Single case or across all of them. SurgBot never touches the pipeline - it only *reads* the graph SurgGraph already produced.
-- **Stateful, multi-turn dialogue.** A structured 6-phase review, held across one continuous session on Agent Runtime's managed sessions with real `session_id` continuity:
-  - case briefing
-  - phase-by-phase walkthrough
-  - error-and-complication review
-  - proposal/divergence review
-  - synthesis into an approvable review document
-  - cross-session pattern review
-  - _**Not a rigid script**_ - the reviewer can skip ahead, double back, or ask a standing cross-case question at any point, and the conversation keeps its place.
-- **Real-time context retrieval.** The root agent holds **9 real tools** and pulls exactly the slice each turn needs:
-  - `load_case_graph` / `get_phase_detail` - live reads of the Living Graph, so the reviewer is looking at real case state, not a summary generated once at session start.
-  - `review_error_chain` - retrieves the full causal chain for one error, including the **real literature retrieved at the time** the complication was reasoned about.
-  - `get_error_statistics_across_cases` - aggregate retrieval across every case in the system, and it **discloses when the sample is partial** rather than implying full coverage.
-- **Asks clarifying questions and captures the answer.** Every finding ends with an explicit ask for a verdict - agree / disagree / uncertain - plus free-text coaching notes, recorded through `record_feedback` as they happen.
-- **Adapts within the session and personalises across them.**
-  - _In session_ - a reviewer asking for bulleted, better-formatted answers gets the **very next reply bulleted**; a stated preference for literature under 10 years old changes how the following citations are framed.
-  - _Across sessions_ - `retrieve_reviewer_patterns` reads **Memory Bank** for that reviewer's history, so a returning surgeon is met with their own patterns rather than a blank slate. With no history yet, it says so - it never invents a pattern.
-
-**GEAP - how an organisation discovers, audits, trusts and scales these agents.**
-
-- **Agent discovery.** All **6 agentic services** - the 4 SurgBot reasoning engines plus the 2 Cloud Run agentic services - are registered in **Agent Registry**, so an organisation finds and inspects them through the console's own topology view rather than through this repository.
-- **Multi-agent orchestration at scale.** The root agent dispatches to 4 specialists (`error_chain_reviewer`, `synthesis`, `pattern_insight`, `feedback_router`) via `async_stream_query`. Each is a **separately deployed reasoning engine**, independently versioned and independently redeployable - a change to one specialist does not touch the other four. Running against **103 real cases** today.
-- **Long-term state persistence, in three tiers.**
-  - *Session* - managed Agent Runtime sessions carry continuity within one review.
-  - *System of record* - **Firestore** holds every review, verdict and coaching note, durably and per-reviewer.
-  - *Cross-session memory* - **Memory Bank** holds durable facts, written **only on approval** and retrieved by similarity.
-- **Runtime observability - the reasoning is auditable, not just the output.**
-  - Every tool call is surfaced live in the transcript naming the **real agent, real model and real API surface** that handled it. Nothing is hidden behind a generic "thinking" label.
-  - **OpenTelemetry GenAI spans to Cloud Trace** across every service; GEAP reasoning-engine logs match the relay's activity 1:1.
-  - Every graph node carries `source_agent` / `source_tool` provenance, so any claim traces back to the exact call that produced it.
-- **Security enforcement.**
-  - **Model Armor** screens the surgeon's turn **before Gemini sees it**, and the drafted document before a human sees it - one policy template, both directions, fail-closed.
-  - **Agent Identity** (SPIFFE) auto-provisioned on the 4 subagents - **no long-lived keys**.
-  - Least-privilege service accounts: deploy rights and data rights are held by different identities, and the frontend holds **zero roles**.
-  - Human input is treated as untrusted exactly like model output - an edited document is re-screened and re-gated before anything is filed.
-
-**3. The learning layer - what closes the circuit.**
-
-Persistent memory that survives the session and crosses into the other workflow: what a surgeon says in a review becomes context the autonomous pipeline reads on the next case.
-
-- **Approval-gated.** Nothing said in a session becomes durable knowledge until the surgeon approves the review document. **The approval is the write.**
-- **Classified, then routed to the agent it belongs to.** Feedback is classified and sent to agent responsible for handling it (e.g. literature review feedback gets mapped to literature query agent)
-- **Advisory only, by construction.** Explicitly marked *"NOT ground truth"*, forbidden from suppressing findings, and **structurally unable to touch the verification gate** - a surgeon's opinion can inform the reasoning, but it can never unlock an external write the evidence doesn't support.
-
-### Agent roster
+#### SurgBot Orchestration
 
 | Component | Layer | What it does |
 |---|---|---|
-| **Perception** | SurgGraph | One Gemini 3.5 vision call per 5-second window. Captures activity/instrument/phase/relation. |
-| **Error Detection - Temporal** | SurgGraph | Motion across the window: activity hesitation, retries, multi-attempt patterns. |
-| **Error Detection - Spatial** | SurgGraph | Instrument and anatomical positioning at native resolution - what left the field of view. |
-| **Error Detection - Procedural** | SurgGraph | Observed technique vs. expected protocol, against six OCHRA-derived error categories. |
-| **Weighted Aggregation + Severity** | SurgGraph · *deterministic* | Requires ≥2-of-3 role agreement and a composite score above threshold to raise an error, then scores severity. **No model** - consensus arithmetic isn't a thing an LLM should do. |
-| **Complication Reasoning** | SurgGraph | Event-driven off error nodes above a severity threshold. Formulates a literature query from live case context and writes complications linked back to their evidence, with rationale specific to *this* patient. |
-| **Literature Retrieval** | SurgGraph · *tool* | Europe PMC, PubMed E-utilities and Semantic Scholar queried in parallel, merged by reciprocal rank fusion with DOI dedup. Every citation traces to a real query. |
-| **Corrective Replanning** | SurgGraph | Selects from a bounded, pre-authored action library derived from OCHRA's own normal-technique indicators, or escalates when nothing fits. Never invents a novel procedure. |
-| **Proposal Acknowledgment** | SurgGraph · *HITL* | The surgeon acknowledges or dismisses a live proposal. The decision is durable graph state, so it survives a restart. |
-| **Divergence Detection** | SurgGraph | Polls only while a proposal is live. Deterministic graph check first; LLM reasoning only when that's ambiguous. Writes nothing when the plan is followed. |
-| **Verification Gate** | SurgGraph · *deterministic* | Eleven structural checks over the graph, fail-closed. Read-only: it cannot write the action it approves. |
-| **Documentation** | SurgGraph | Drafts the operative record on **MedGemma 4B**, with no general-model fallback. Screened by Model Armor before a surgeon sees an Approve button. |
-| **Operative Record Approval** | SurgGraph · *HITL* | Approve, edit or reject. An edit is re-screened and re-gated before filing - human input is treated as untrusted, exactly like model output. |
-| **FHIR Write Executors** | SurgGraph · *tool* | Thin adapters. Real `Communication` and `DocumentReference` writes, each read back to confirm. |
-| **SurgBot Orchestrator** | SurgBot | The one agent the surgeon talks to. Nine real tools driving the six-phase review.|
-| **Error Chain Reviewer** | SurgBot | Explains the mechanism behind a flagged error and probes whether it holds up clinically. Separately deployed with Agent Identity. |
-| **Synthesis** | SurgBot | Drafts the case review document from what the surgeon actually said. |
-| **Pattern Insight** | SurgBot | Surfaces patterns across a reviewer's prior sessions from Memory Bank. |
-| **Feedback Router** | SurgBot | Classifies free-text feedback as and routes it to the pipeline agent it belongs to. |
-| **Review Approval** | SurgBot · *HITL* | Approving the review is what turns captured feedback into durable knowledge. |
-| **MedASR / Chirp 3 HD** | SurgBot · *tool* | Medical-domain speech recognition in, streaming HD synthesis out. |
+| **SurgBot Orchestrator** | SurgBot | **The collaborative assistant allwing surgeons to review cases**. Nine tools, driving a six-phase review - case framing, phase walkthrough, error review, proposal/divergence review, synthesis, cross-session patterns - plus standing cross-case queries. |
+| **Error Chain Reviewer** | SurgBot | **Explains** the mechanism behind a flagged error **and probes whether it holds up clinically**, working from the same evidence chain the pipeline built. Separately deployed with Agent Identity. |
+| **Synthesis** | SurgBot | **Drafts the case review document from what the surgeon actually said** - `agreements`, `disagreements` and `coaching notes`, captured as they happened. |
+| **Pattern Insight** | SurgBot | **Surfaces patterns** across a reviewer's previous sessions **from Memory Bank**. Reports "no history yet" honestly rather than inventing one. |
+| **Feedback Router** | SurgBot | Classifies free-text surgeon feedback as a standing directive or a case-grounded observation, and routes it to the pipeline agent it belongs to. |
+| **Review Approval** | SurgBot · HITL | Approving the review is what turns captured feedback into **durable knowledge**. *Nothing said in a session reaches the pipeline until the surgeon signs off*. |
+| **MedASR / Chirp 3 HD** | SurgBot · Tool | Self-deployed **medical-domain speech recognition** in, streaming HD synthesis out. Disclosed in the transcript as plain API calls. |
 
 ---
 
-## 5. Google Cloud Services
+## 7. Google Cloud Services
 
-| Category | Services |
-|---|---|
-| **AI models** | **Gemini 3.5 Flash** (Vertex AI, `global` endpoint) · **MedGemma 4B** (self-deployed Vertex AI endpoint) · **MedASR** (self-deployed Conformer ASR) · **Chirp 3 HD** (Cloud Text-to-Speech) |
-| **Agent platform** | **Vertex AI** · **Gemini Enterprise Agent Platform** - Agent Runtime (5 engines) · Agent Registry (6 services) · Agent Identity (SPIFFE) · Memory Bank · **Model Armor** |
-| **Infrastructure** | **Cloud Run** (4 services) · **Cloud Build** (CI/CD on push to main) · **Firestore** (Living Graph) · **Cloud Storage** · **Artifact Registry** |
-| **Observability** | **Cloud Trace** (OpenTelemetry GenAI spans) · **Cloud Logging** · **Cloud Monitoring** |
+**AI models**
+- **Gemini 3.5 Flash** - Vertex AI, `global` endpoint. Vision and reasoning for all 12 SurgGraph agents and all 5 SurgBot agents.
+- **MedASR** - self-deployed Conformer ASR (Health AI Developer Foundations). Medical-domain speech-to-text for SurgBot's voice turns.
+- **Chirp 3 HD** - Cloud Text-to-Speech. Streams SurgBot's spoken replies sentence by sentence.
+
+**Agent platform**
+- **Vertex AI** - model serving and endpoints for every Gemini and MedASR call.
+- **Gemini Enterprise Agent Platform**
+  - **Agent Runtime** - 5 separately deployed reasoning engines hosting SurgBot.
+  - **Agent Registry** - 6 registered services across both runtimes.
+  - **Agent Identity** - SPIFFE-based identity on the tool-free subagents.
+  - **Memory Bank** - managed cross-session memory; the substrate of the learning layer.
+  - **Model Armor** - one template, enforced on both inbound user turns and outbound generated content.
+
+**Infrastructure**
+- **Cloud Run** - 4 services: state, orchestrator, SurgBot relay, frontend.
+- **Cloud Build** - CI/CD; builds and deploys all four on push to main.
+- **Firestore** - the Living Graph. Multi-tenant, per-case isolated, transactional, with native real-time fan-out.
+- **Cloud Storage** - surgical video, build artifacts.
+- **Artifact Registry** - container images.
+
+**Observability**
+- **Cloud Trace** - OpenTelemetry GenAI spans across every service.
+- **Cloud Logging + Cloud Monitoring** - agent and service logs, metrics.
 
 ---
 
-## 6. Spin-Up Instructions
+## 8. Data Sources
+
+- **SAR-RARP50** - Surgical video dataset for the surgical video
+- **SEDMamba** - per-frame error ground truth, used **only for offline scoring**, no data-leakage to any agent at run time.
+- **OCHRA** - the published error taxonomy behind the six categories; the fix library inverts its own good-technique indicators, so a suggested fix is never novel clinical advice.
+- **Europe PMC · PubMed E-utilities · Semantic Scholar** - three live literature APIs queried at reasoning time and merged by rank fusion; no static corpus, no templated query.
+- **HAPI FHIR** (public server) - the external medical record destination, with every write read back to confirm.
+- **Synthetic patient profile and vitals** - modeled on real physiology.
+
+---
+
+## 9. Spin-Up Instructions
 
 ### Prerequisites
 
@@ -338,7 +400,6 @@ Key variables:
 | `FHIR_BASE_URL` | `tools/fhir_write.py`, `tools/fhir_alert.py` | Default `https://hapi.fhir.org/baseR4` |
 | `STATE_SERVICE_URL` | `tools/state_tools.py` | If unset, agents fall back to local JSONL (scripts/tests only) |
 | `SURGGRAPH_MODEL_ARMOR_TEMPLATE_ID` | `tools/model_armor.py` | Model Armor template ID |
-| `MEDGEMMA_ENDPOINT_ID` | `tools/medgemma_model.py` | Vertex AI endpoint for the documentation model |
 | `MEDASR_ENDPOINT_ID` | `agents/surgbot/speech.py` | Vertex AI endpoint for medical speech-to-text |
 | `SURGBOT_ROOT_AGENT_RESOURCE` | `services/surgbot_service` | Deployed Agent Runtime reasoning engine |
 | `SURGGRAPH_FEEDBACK_KB_ENGINE` | `tools/feedback_kb.py` | Memory Bank engine backing the learning layer |
@@ -348,14 +409,7 @@ Key variables:
 
 ### Step 6 - Deploy the model endpoints
 
-MedGemma and MedASR are self-deployed from Model Garden. Both are GPU-backed and billed hourly while running.
-
-```bash
-# MedGemma 4B - g2-standard-24 + 2x NVIDIA L4
-# MedASR      - n1-standard-8  + 1x NVIDIA T4
-```
-
-Deploy both via Model Garden, then set `MEDGEMMA_ENDPOINT_ID` and `MEDASR_ENDPOINT_ID` in `.env`.
+MedASR is self-deployed from Model Garden (`n1-standard-8` + 1x NVIDIA T4). It is GPU-backed and billed hourly while running. Deploy it, then set `MEDASR_ENDPOINT_ID` in `.env`.
 
 ### Step 7 - Run locally
 
@@ -410,7 +464,7 @@ uv run scripts/validate_graph_chain.py <case_id> # dangling / orphans / reachabi
 
 ---
 
-## 7. Project Structure
+## 10. Project Structure
 
 ```
 surggraph/
@@ -424,7 +478,7 @@ surggraph/
 │   ├── divergence_detection/    #   actual vs. proposed trajectory
 │   ├── alert_routing/           #   intent-before-write, gate-checked delivery
 │   ├── verification_gate/       #   fail-closed, read-only by import, no LLM
-│   ├── documentation/           #   MedGemma operative record draft
+│   ├── documentation/           #   operative record draft
 │   ├── hitl/                    #   acknowledgment + approval state transitions
 │   └── surgbot/                 #   root agent, 4 subagents, tools, speech, Memory Bank
 │
@@ -440,7 +494,6 @@ surggraph/
 │
 ├── tools/                       # capabilities, not agents
 │   ├── gemini_model.py          #   global-endpoint Gemini wrapper
-│   ├── medgemma_model.py        #   MedGemma endpoint client
 │   ├── state_tools.py           #   the single graph write path
 │   ├── context_slice.py         #   deterministic per-agent graph slicing
 │   ├── model_armor.py           #   inbound + outbound screening
@@ -466,21 +519,31 @@ surggraph/
 
 ---
 
-## 8. Data Sources
+## 11. Accomplishments
 
-| Source | Role |
-|---|---|
-| **[SAR-RARP50](https://rdr.ucl.ac.uk/projects/SAR-RARP50_Segmentation_of_surgical_instrumentation_and_Action_Recognition_on_Robot-Assisted_Radical_Prostatectomy_Challenge/191091)** | The source surgical video, with per-frame action and instrument-segmentation annotations. Action IDs reach the perception agent as **opaque numeric hints only** - never a name. |
-| **[SEDMamba error annotations](https://doi.org/10.5522/04/27992702)** | Per-frame error ground truth, used **exclusively for offline accuracy measurement.** Never seen by any detection agent at inference time. |
-| **OCHRA** | The published error taxonomy behind the six error categories. The corrective action library inverts OCHRA's own *normal*-technique indicators, so a correction is never novel clinical advice. |
-| **CARES** | The published zero-shot multi-agent surgical-error-detection architecture. The three-role detection design is modeled on it and reported against its macro-F1 of 0.543. |
-| **[Europe PMC](https://europepmc.org/RestfulWebService) · [PubMed E-utilities](https://www.ncbi.nlm.nih.gov/books/NBK25501/) · [Semantic Scholar](https://api.semanticscholar.org/)** | Live literature retrieval at reasoning time, merged by reciprocal rank fusion. No static corpus, no templated query. |
-| **[HAPI FHIR](https://hapi.fhir.org)** (public test server) | The external clinical record destination. Real `Communication` and `DocumentReference` writes, read back to confirm. |
-| **Synthetic patient twin and vitals** | ASA class, BMI, prostate volume, comorbidities, and a vitals stream modeled on real RARP physiology. **Labeled synthetic everywhere it surfaces.** |
+- **A complete autonomous chain from raw surgical video to a real external clinical write**, readback-verified against a live FHIR server. Not a webhook, not a simulated EHR - a real `DocumentReference` and a real `Communication` resource that can be fetched back by ID.
+- **A learning loop that is closed and proven.** All four consuming agents show real Memory Bank retrievals in deployed Cloud Run logs, with real cache behavior (6.76s cold → 0.19s warm). Feedback given in one session demonstrably reaches the next case.
+- **34% end-to-end wall-time reduction** on the instrumented comparison window (328.8s → 217.8s), with zero drain-budget cancellations and the graph chain independently re-validated as fully connected on every run.
+- **A fail-closed gate that has visibly blocked writes.** `verification_block` is a first-class node type, so a refusal is as inspectable as an approval - which is the property that makes the system auditable.
+- **A medical-domain speech model where it actually changes the answer** - MedASR transcribes clinical dictation at a 5.2% word error rate against Whisper large-v3's 28.2% on Google's multi-specialty test set.
+- **159 tests passing, four Cloud Run services deployed by Cloud Build on push to main, six services in Agent Registry**, and OpenTelemetry spans across every one of them.
+---
+
+## 12. What's Next
+
+- **Re-tune the detection threshold** to perform best-performing threshold for the case-specific workflow.
+- **Generalize beyond RARP** - the error taxonomy, corrective library and phase priors are procedure-specific by construction; multi-procedure support is the real test of the architecture.
+- **Real EHR integration** beyond a public test FHIR server, and real intraoperative telemetry in place of the synthetic vitals stream.
 
 ---
 
-## 9. Disclaimer
+## 13. Built With
+
+`google-adk` · `gemini-3.5-flash` · `vertex-ai` · `medasr` · `chirp-3-hd` · `gemini-enterprise-agent-platform` · `agent-runtime` · `agent-registry` · `agent-identity` · `memory-bank` · `model-armor` · `cloud-run` · `cloud-build` · `firestore` · `cloud-storage` · `artifact-registry` · `cloud-trace` · `opentelemetry` · `python` · `fastapi` · `server-sent-events` · `websockets` · `pydantic` · `opencv` · `react` · `typescript` · `vite` · `reactflow` · `hapi-fhir` · `europe-pmc` · `pubmed` · `semantic-scholar`
+
+---
+
+## 14. Disclaimer
 
 > ### This is a hackathon project. It is not a medical device.
 >
@@ -489,7 +552,7 @@ surggraph/
 
 ---
 
-## 10. Attributions
+## 15. Attributions
 
 - **CARES** - the zero-shot multi-agent surgical-error-detection architecture the three-role detection design is modeled on, and the accuracy baseline reported against.
 - **OCHRA** (Observational Clinical Human Reliability Analysis) - the error taxonomy behind the six error categories, their indicators, and the derived corrective action library.
