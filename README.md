@@ -17,7 +17,7 @@
 
 **Built for:** [All Things Agentic Hackathon](https://allthingsagentichackathon.devpost.com/) · Taskmaster track + Collaborative Assistant deployed on GEAP
 
-**Live Demo:** _(demo video - add URL)_
+**Live Demo:** [SurgOS Demo](https://vimeo.com/1222691662?fl=pl&fe=sh)
 
 **Live Deployment:** https://surggraph-frontend-518946358970.us-central1.run.app
 
@@ -55,9 +55,13 @@
 
 **And feedback from one case rarely reaches the next -** complications from one case can happen in the next case too.
 
-> _**Real example**: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/), a stitching needle slipped out of view during a robotic prostate operation and was lost inside the patient. Finding it meant stopping to search and X-ray - and X-rays miss needles under 10 mm about **70% of the time**. Leaving one behind is what hospitals call a *never event*: roughly **1 in 10,000 operations**, at an average cost of **about $166,000** each time._
+> _**Real example**: In a [case published in 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10436752/), a stitching needle was lost inside a patient during a robotic prostate operation - it slipped while being withdrawn through a port, and nobody knew until the count came up short. It took a 10-minute search to find, and X-rays miss needles this size about **70% of the time**. Leaving one behind is what hospitals call a *never event*: roughly **1 in 10,000 operations**, at an average cost of **about $166,000** each time._
 
->**The needle was on camera the whole time it went missing.** Nobody was watching that feed, nothing reasoned about where it had gone, the operative note was written weeks later, and none of it reached the next case.
+>**Every one of these is a gap in what the OR keeps track of - and that is what SurgOS closes.** 
+  - It maintains a live record of every instrument and action 
+  - Flags a technique error in the window it happens
+  - Drafts the operative note in minutes
+  - Carries the surgeon's correction into the next case.
 
 ### The evidence
 

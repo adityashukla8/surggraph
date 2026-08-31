@@ -65,7 +65,7 @@ export function HowItWorksSection() {
       {/* Two workflows, two canvases, one shared legend. Separate canvases so
           each fitView zooms to its own content — sharing one would scale both
           to the wider diagram and shrink SurgBot's labels for no reason. */}
-      <div className="home__pipeline-card">
+      <div className="home__pipeline-card" id="surgos-workflow-board">
         <FlowLegend />
         <div className="home__flow-split">
           <PipelineFlow />
